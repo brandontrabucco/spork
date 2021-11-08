@@ -24,7 +24,7 @@ CLASSIFIERS = [
 URL = 'https://github.com/brandontrabucco/singular'
 
 
-setup(name='singular', version='1.0.1', license='MIT',
+setup(name='singular-launcher', version='1.0.1', license='MIT',
       packages=find_packages(include=['singular', 'singular.*']),
       description=('Singular API For Launching '
                    'Experiments Using Singularity On Slurm'),
