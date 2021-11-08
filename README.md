@@ -44,7 +44,15 @@ A typical experiment creation pipeline involved working on code locally, testing
 python do_my_experiment.py
 ```
 
-Once your code is ready for deployment in the singularity image, point singular to the repository folder.
+Once your code is ready for deployment in the singularity image, tell singular how to install your code from github.
+
+```bash
+singular set --git-url https://github.com/username/repo
+singular set --git-target /code/repo
+singular set --install-command "pip install -e {git_target}"
+```
+
+Then, point singular to where your code working directory is stored locally.
 
 ```bash
 singular set --sync-from /home/username/repo
