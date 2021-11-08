@@ -4,7 +4,7 @@ Singular is a quality of life package that enables rapid deployment of code on a
 
 ## Installation
 
-Singular can be installed using pip.
+Singular can be installed using the pip package.
 
 ```bash
 pip install singular-launcher
