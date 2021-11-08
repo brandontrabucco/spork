@@ -107,7 +107,7 @@ SINGULARITY_EXEC_TEMPLATE = "singularity \
 # a template for launching an experiment using a slurm scheduler
 SLURM_SRUN_TEMPLATE = "srun --cpus-per-task={num_cpus} \
     --gres=gpu:{num_gpus} --mem={memory}g \
-    --time={num_hours}:00:00 -p russ_reserved {slurm_command}"
+    --time={num_hours}:00:00 -p {partition} {slurm_command}"
 
 
 # credentials for logging in to the remote host using ssh
@@ -335,7 +335,7 @@ class ExperimentConfig(object):
         # arguments that specify where and how to install source code
         self.git_url = git_url
         self.git_target = git_target
-        self.install_command = install_command.format(git_target=git_target)
+        self.install_command = install_command
 
         # arguments that specify how to sync code before an experiment
         self.sync = sync
@@ -344,11 +344,8 @@ class ExperimentConfig(object):
 
         # always initialize conda before running experiments, and then
         # run any user provided code afterwards
-        init_commands = [command.format(
+        self.init_commands = [command.format(
             git_target=git_target) for command in init_commands]
-        self.init_commands = [". /anaconda3/etc/profile.d/conda.sh",
-                              "conda activate {}".format(env_name),
-                              "cd {}".format(git_target), *init_commands]
 
     def local_recipe_exists(self) -> bool:
         """Utility function that checks the local disk for whether a
@@ -496,7 +493,8 @@ class ExperimentConfig(object):
                 env_name=self.env_name,
                 env_packages=self.env_packages,
                 git_command=git_command,
-                install_command=self.install_command))
+                install_command=self.install_command
+                .format(git_target=self.git_target)))
 
     def write_singularity_image(self, **kwargs):
         """Using the provided class attributes, generate a singularity
@@ -680,7 +678,11 @@ class ExperimentConfig(object):
 
         return SINGULARITY_EXEC_TEMPLATE.format(
             singularity_command=" && ".join(
-                self.init_commands + list(commands)), image=image)
+                [". /anaconda3/etc/profile.d/conda.sh",
+                 "conda activate {}".format(self.env_name),
+                 "cd {}".format(self.git_target)] + [
+                    command.format(git_target=self.git_target) for command in
+                    list(self.init_commands) + list(commands)]), image=image)
 
     def local_run(self, *commands: str,
                   sync: bool = None, rebuild: bool = False):
@@ -720,8 +722,9 @@ class ExperimentConfig(object):
         for line in iter(stdout.readline, ""):
             print(line)  # prints even if the command is not yet finished
 
-    def run_in_slurm(self, *commands: str, num_cpus: int = 4,
-                     num_gpus: int = 1, memory: int = 16, num_hours: int = 8,
+    def run_in_slurm(self, *commands: str, partition: str = "russ_reserved",
+                     num_cpus: int = 4, num_gpus: int = 1,
+                     memory: int = 16, num_hours: int = 8,
                      image: str = DEFAULT_REMOTE_IMAGE) -> str:
         """Using the provided class attributes, generate a command that can
         be executed in a bash shell to start a slurm job that runs
@@ -748,6 +751,9 @@ class ExperimentConfig(object):
         num_hours: int
             an integer representing the amount of time the slurm job will be
             allowed to run before forcibly terminating.
+        partition: str
+            a string that represents the slurm partition of machines to use
+            when scheduling a slurm job on the host machine.
 
         Returns:
 
@@ -758,13 +764,14 @@ class ExperimentConfig(object):
         """
 
         return SLURM_SRUN_TEMPLATE.format(
-            num_cpus=num_cpus, num_gpus=num_gpus, num_hours=num_hours,
-            memory=memory, slurm_command=self.run_in_singularity(*commands,
-                                                                 image=image))
+            partition=partition, num_cpus=num_cpus, num_gpus=num_gpus,
+            num_hours=num_hours, memory=memory,
+            slurm_command=self.run_in_singularity(*commands, image=image))
 
     def remote_run(self, *commands: str, sync: bool = None,
-                   rebuild: bool = False, num_cpus: int = 4,
-                   num_gpus: int = 1, memory: int = 16, num_hours: int = 8):
+                   rebuild: bool = False, partition: str = "russ_reserved",
+                   num_cpus: int = 4, num_gpus: int = 1,
+                   memory: int = 16, num_hours: int = 8):
         """Generate and run a command in the bash shell that starts a
         singularity container remotely and runs commands in that container
         and prints outputs to the standard output stream.
@@ -793,6 +800,9 @@ class ExperimentConfig(object):
         num_hours: int
             an integer representing the amount of time the slurm job will be
             allowed to run before forcibly terminating.
+        partition: str
+            a string that represents the slurm partition of machines to use
+            when scheduling a slurm job on the host machine.
 
         """
 
@@ -820,7 +830,7 @@ class ExperimentConfig(object):
 
         # generate a command to launch a remote experiment using slurm
         stdout = client.exec_command(self.run_in_slurm(
-            *commands, image=self.remote_image,
+            *commands, image=self.remote_image, partition=partition,
             num_cpus=num_cpus, num_gpus=num_gpus,
             num_hours=num_hours, memory=memory), get_pty=True)[1]
 
@@ -1100,8 +1110,7 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         if git_target is not None:
             config.git_target = git_target
         if install_command is not None:
-            config.install_command = \
-                install_command.format(git_target=config.git_target)
+            config.install_command = install_command
 
         if sync is not None:
             config.sync = sync
@@ -1111,12 +1120,7 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
             config.exclude_from_sync = exclude_from_sync
 
         if init_commands is not None and len(init_commands) > 0:
-            init_commands = [command.format(
-                git_target=config.git_target) for command in init_commands]
-            config.init_commands = [
-                ". /anaconda3/etc/profile.d/conda.sh",
-                "conda activate {}".format(config.env_name),
-                "cd {}".format(config.git_target), *init_commands]
+            config.init_commands = init_commands
 
 
 @command_line_interface.command()
@@ -1336,12 +1340,13 @@ def local(rebuild: bool = False,
 @click.option('--num-gpus', type=int, default=1)
 @click.option('--memory', type=int, default=16)
 @click.option('--num-hours', type=int, default=8)
+@click.option('--partition', type=str, default="russ_reserved")
 @click.option('--rebuild', is_flag=True)
 @click.option('--sync/--no-sync', is_flag=True, default=None)
 @click.argument('commands', type=str, nargs=-1)
 def remote(num_cpus: int = 4, num_gpus: int = 1,
            memory: int = 16, num_hours: int = 8,
-           rebuild: bool = False,
+           partition: str = "russ_reserved", rebuild: bool = False,
            sync: bool = None, commands: List[str] = ()):
     """Load the persistent experiment configuration file and launch an
     experiment remotely by loading the singularity image and syncing local
@@ -1361,6 +1366,9 @@ def remote(num_cpus: int = 4, num_gpus: int = 1,
     num_hours: int
         an integer representing the amount of time the slurm job will be
         allowed to run before forcibly terminating.
+    partition: str
+        a string that represents the slurm partition of machines to use
+        when scheduling a slurm job on the host machine.
 
     rebuild: bool
         a boolean that controls whether the singularity image should be
@@ -1376,6 +1384,7 @@ def remote(num_cpus: int = 4, num_gpus: int = 1,
 
     with PersistentExperimentConfig() as config:
         config.remote_run(" ".join(commands), sync=sync, rebuild=rebuild,
+                          partition=partition,
                           num_cpus=num_cpus, num_gpus=num_gpus,
                           memory=memory, num_hours=num_hours)
 
