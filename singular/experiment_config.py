@@ -71,7 +71,7 @@ DEFAULT_APT_PACKAGES = ("unzip", "htop", "wget",
 # arguments that describe the conda environment to build
 DEFAULT_ANACONDA_VERSION = "2021.05"
 DEFAULT_PYTHON_VERSION = "3.7"
-DEFAULT_ENV_NAME = "nerf"
+DEFAULT_ENV_NAME = "venv"
 DEFAULT_ENV_PACKAGES = "pytorch torchvision " \
                        "torchaudio cudatoolkit=11.3 -c pytorch"
 
@@ -84,20 +84,19 @@ DEFAULT_REMOTE_IMAGE = "experiment.sif"
 
 
 # arguments that describe how to install the experiment code from github
-DEFAULT_GIT_URL = "https://github.com/brandontrabucco/nerf.git"
-DEFAULT_GIT_TARGET = "/code/nerf"
-DEFAULT_INSTALL_COMMAND = "pip install -e {git_target}"
+DEFAULT_GIT_URL = ""
+DEFAULT_GIT_TARGET = "/code/repo"
+DEFAULT_INSTALL_COMMAND = "pip install matplotlib"
 
 
 # information about how to sync code before running an experiment
-DEFAULT_SYNC = True
-DEFAULT_SYNC_WITH = "/home/btrabucco/PycharmProjects/nerf"
+DEFAULT_SYNC = False
+DEFAULT_SYNC_WITH = ""
 DEFAULT_EXCLUDE_FROM_SYNC = "*.pkl"
 
 
 # a default command that may be run in the container
-DEFAULT_INIT_COMMANDS = ("sleep 1",
-                         "echo 'running test experiment'")
+DEFAULT_INIT_COMMANDS = ()
 
 
 # a template for running experiment commands in the container
@@ -117,6 +116,10 @@ DEFAULT_SSH_PASSWORD = "password"
 DEFAULT_SSH_HOST = "matrix.ml.cmu.edu"
 DEFAULT_SSH_PORT = 22
 DEFAULT_SSH_SLEEP_SECONDS = 0.001
+
+
+# the amount of seconds to wait by default for a command ran by pexpect
+DEFAULT_PROCESS_TIMEOUT = 10800
 
 
 class ExperimentConfig(object):
@@ -542,10 +545,11 @@ class ExperimentConfig(object):
                                 source_path,
                                 destination_path], encoding='utf-8')
 
-        # print outputs of the process to the terminal and wait for the
-        # process to finish copying files in the tree
-        child.logfile = sys.stdout
-        child.expect(EOF, timeout=10800)  # catch when it finishes with EOF
+        # print outputs of the process to the terminal but not passwords
+        child.logfile_read = sys.stdout
+
+        # catch when the process finishes because it outputs the EOF token
+        child.expect(EOF, timeout=DEFAULT_PROCESS_TIMEOUT)
 
     def remote_rsync(self, source_path: str, destination_path: str,
                      recursive: bool = False, exclude: str = "",
@@ -602,18 +606,19 @@ class ExperimentConfig(object):
                                 source_path,
                                 destination_path], encoding='utf-8')
 
-        # print outputs of the process to the terminal
-        child.logfile = sys.stdout
+        # print outputs of the process to the terminal but not passwords
+        child.logfile_read = sys.stdout
 
         # expect the host to prompt our client for a kuberos password
         child.expect("{username}@{host}'s password:"
                      .format(username=self.ssh_username, host=self.ssh_host))
 
         # once we have been prompted for a password enter it into the stdin
-        # and wait until the child process finishes
         time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
         child.sendline(self.ssh_password)
-        child.expect(EOF, timeout=10800)  # catch when it finishes with EOF
+
+        # catch when the process finishes because it outputs the EOF token
+        child.expect(EOF, timeout=DEFAULT_PROCESS_TIMEOUT)
 
     def upload_singularity_recipe(self):
         """Using the provided class attributes, generate and run a command in
@@ -653,7 +658,7 @@ class ExperimentConfig(object):
                           self.remote_image, source_is_remote=False,
                           destination_is_remote=True, recursive=True)
 
-    def run_in_singularity(self, *commands: List[str],
+    def run_in_singularity(self, *commands: str,
                            image: str = DEFAULT_REMOTE_IMAGE) -> str:
         """Using the provided class attributes, generate a command that can
         be executed in a bash shell to start a singularity container and
@@ -677,7 +682,7 @@ class ExperimentConfig(object):
             singularity_command=" && ".join(
                 self.init_commands + list(commands)), image=image)
 
-    def local_run(self, *commands: List[str],
+    def local_run(self, *commands: str,
                   sync: bool = None, rebuild: bool = False):
         """Generate and run a command in the bash shell that starts a
         singularity container locally and runs commands in that container
@@ -715,7 +720,7 @@ class ExperimentConfig(object):
         for line in iter(stdout.readline, ""):
             print(line)  # prints even if the command is not yet finished
 
-    def run_in_slurm(self, *commands: List[str], num_cpus: int = 4,
+    def run_in_slurm(self, *commands: str, num_cpus: int = 4,
                      num_gpus: int = 1, memory: int = 16, num_hours: int = 8,
                      image: str = DEFAULT_REMOTE_IMAGE) -> str:
         """Using the provided class attributes, generate a command that can
@@ -757,7 +762,7 @@ class ExperimentConfig(object):
             memory=memory, slurm_command=self.run_in_singularity(*commands,
                                                                  image=image))
 
-    def remote_run(self, *commands: List[str], sync: bool = None,
+    def remote_run(self, *commands: str, sync: bool = None,
                    rebuild: bool = False, num_cpus: int = 4,
                    num_gpus: int = 1, memory: int = 16, num_hours: int = 8):
         """Generate and run a command in the bash shell that starts a
@@ -810,11 +815,45 @@ class ExperimentConfig(object):
                        username=self.ssh_username, password=self.ssh_password,
                        look_for_keys=False, allow_agent=False)
 
+        # sleep in order to avoid sending too many commands to the server
+        time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
+
         # generate a command to launch a remote experiment using slurm
         stdout = client.exec_command(self.run_in_slurm(
             *commands, image=self.remote_image,
             num_cpus=num_cpus, num_gpus=num_gpus,
             num_hours=num_hours, memory=memory), get_pty=True)[1]
+
+        # print the output from the terminal as the command runs
+        for line in iter(stdout.readline, ""):
+            print(line)  # prints even if the command is not yet finished
+
+    def remote_run_in_slurm_shell(self, *commands: str):
+        """Run a set of commands on the remote machine, which can be used to
+        check on jobs that are scheduled or running on the host, and also to
+        cancel jobs that are scheduled or running.
+
+        Arguments:
+
+        commands: List[str]
+            a list of strings representing commands that are run on the host
+            machine through an ssh connecting.
+
+        """
+
+        # open an ssh connection to the remote host by logging in using the
+        # provided username and password for that machine
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(self.ssh_host, self.ssh_port,
+                       username=self.ssh_username, password=self.ssh_password,
+                       look_for_keys=False, allow_agent=False)
+
+        # sleep in order to avoid sending too many commands to the server
+        time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
+
+        # generate a command to launch a remote experiment using slurm
+        stdout = client.exec_command(" && ".join(commands), get_pty=True)[1]
 
         # print the output from the terminal as the command runs
         for line in iter(stdout.readline, ""):
@@ -1262,7 +1301,8 @@ def get(ssh_username: bool = False,
             print("init_commands:", config.init_commands)
 
 
-@command_line_interface.command()
+@command_line_interface.command(
+    context_settings=dict(ignore_unknown_options=True))
 @click.option('--rebuild', is_flag=True)
 @click.option('--sync/--no-sync', is_flag=True, default=None)
 @click.argument('commands', type=str, nargs=-1)
@@ -1290,7 +1330,8 @@ def local(rebuild: bool = False,
         config.local_run(" ".join(commands), sync=sync, rebuild=rebuild)
 
 
-@command_line_interface.command()
+@command_line_interface.command(
+    context_settings=dict(ignore_unknown_options=True))
 @click.option('--num-cpus', type=int, default=4)
 @click.option('--num-gpus', type=int, default=1)
 @click.option('--memory', type=int, default=16)
@@ -1337,6 +1378,26 @@ def remote(num_cpus: int = 4, num_gpus: int = 1,
         config.remote_run(" ".join(commands), sync=sync, rebuild=rebuild,
                           num_cpus=num_cpus, num_gpus=num_gpus,
                           memory=memory, num_hours=num_hours)
+
+
+@command_line_interface.command(
+    context_settings=dict(ignore_unknown_options=True))
+@click.argument('commands', type=str, nargs=-1)
+def slurm(commands: List[str] = ()):
+    """Run a set of bash commands on the remote machine, which can be used to
+    check on jobs that are scheduled or running on the host, and also to
+    cancel jobs that are scheduled or running.
+
+    Arguments:
+
+    commands: List[str]
+        a list of strings representing commands that are run on the host
+        machine through an ssh connecting.
+
+    """
+
+    with PersistentExperimentConfig() as config:
+        config.remote_run_in_slurm_shell(" ".join(commands))
 
 
 @command_line_interface.command()
