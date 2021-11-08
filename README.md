@@ -12,7 +12,7 @@ pip install singular-launcher
 
 ## Usage
 
-You may configure singular to remember the ssh credentials to your remote cluster using the following example in the terminal.
+You may configure singular to remember the ssh credentials to your cluster using the following example.
 
 ```bash
 singular set --ssh-username username --ssh-password password --ssh-host compute.example.com
