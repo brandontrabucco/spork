@@ -4,6 +4,7 @@ import os
 import paramiko
 import pickle as pkl
 import click
+import json
 
 
 from pexpect import spawn, EOF
@@ -105,7 +106,7 @@ SINGULARITY_EXEC_TEMPLATE = "singularity \
 
 
 # a template for launching an experiment using a slurm scheduler
-SLURM_SRUN_TEMPLATE = "srun --cpus-per-task={num_cpus} \
+SLURM_SRUN_TEMPLATE = "sbatch --cpus-per-task={num_cpus} \
     --gres=gpu:{num_gpus} --mem={memory}g \
     --time={num_hours}:00:00 -p {partition} {slurm_command}"
 
@@ -115,7 +116,7 @@ DEFAULT_SSH_USERNAME = "username"
 DEFAULT_SSH_PASSWORD = "password"
 DEFAULT_SSH_HOST = "matrix.ml.cmu.edu"
 DEFAULT_SSH_PORT = 22
-DEFAULT_SSH_SLEEP_SECONDS = 0.001
+DEFAULT_SSH_SLEEP_SECONDS = 0.005
 
 
 # the amount of seconds to wait by default for a command ran by pexpect
@@ -341,11 +342,7 @@ class ExperimentConfig(object):
         self.sync = sync
         self.sync_with = sync_with
         self.exclude_from_sync = exclude_from_sync
-
-        # always initialize conda before running experiments, and then
-        # run any user provided code afterwards
-        self.init_commands = [command.format(
-            git_target=git_target) for command in init_commands]
+        self.init_commands = init_commands
 
     def local_recipe_exists(self) -> bool:
         """Utility function that checks the local disk for whether a
@@ -1477,6 +1474,85 @@ def download(recursive: bool = False, exclude: str = "",
                             destination_path, recursive=recursive,
                             exclude=exclude, source_is_remote=True,
                             destination_is_remote=False)
+
+
+@command_line_interface.command()
+@click.argument('file', type=str, nargs=1)
+def dump(file: str = None):
+    """Export the current configuration parameters, excluding the ssh
+    credentials to a file as specified in the command line argument,
+    or simply by printing to the terminal.
+
+    Arguments:
+
+    file: str
+        a string representing the path on the local disk to export a file
+        containing the current persistent experiment configuration.
+
+    """
+
+    # export a dictionary containing the non private configuration info
+    with PersistentExperimentConfig() as config:
+        with open(file, "w") as f:
+            json.dump(dict(bootstrap=config.bootstrap,
+                           bootstrap_from=config.bootstrap_from,
+                           apt_packages=config.apt_packages,
+                           anaconda_version=config.anaconda_version,
+                           python_version=config.python_version,
+                           local_recipe=config.local_recipe,
+                           local_image=config.local_image,
+                           remote_recipe=config.remote_recipe,
+                           remote_image=config.remote_image,
+                           env_name=config.env_name,
+                           env_packages=config.env_packages,
+                           git_url=config.git_url,
+                           git_target=config.git_target,
+                           install_command=config.install_command,
+                           sync=config.sync,
+                           sync_with=config.sync_with,
+                           exclude_from_sync=config.exclude_from_sync,
+                           init_commands=config.init_commands), f, indent=4)
+
+
+@command_line_interface.command()
+@click.argument('file', type=str, nargs=1)
+def load(file: str = None):
+    """Load the existing configuration parameters, excluding the ssh
+    credentials from a file as specified in the command line argument,
+    overwriting the current persistent configuration parameters.
+
+    Arguments:
+
+    file: str
+        a string representing the path on the local disk to load a file
+        containing the new persistent experiment configuration.
+
+    """
+
+    # load the specified configuration file from the local disk
+    with open(file, "r") as f:
+        data = json.load(f)  # the format of this object is a dictionary
+
+    # load a dictionary containing the non private configuration info
+    with PersistentExperimentConfig() as config:
+        config.bootstrap = data["bootstrap"]
+        config.bootstrap_from = data["bootstrap_from"]
+        config.apt_packages = data["apt_packages"]
+        config.anaconda_version = data["anaconda_version"]
+        config.python_version = data["python_version"]
+        config.local_recipe = data["local_recipe"]
+        config.local_image = data["local_image"]
+        config.remote_recipe = data["remote_recipe"]
+        config.remote_image = data["remote_image"]
+        config.env_name = data["env_name"]
+        config.env_packages = data["env_packages"]
+        config.git_url = data["git_url"]
+        config.git_target = data["git_target"]
+        config.install_command = data["install_command"]
+        config.sync = data["sync"]
+        config.sync_with = data["sync_with"]
+        config.exclude_from_sync = data["exclude_from_sync"]
+        config.init_commands = data["init_commands"]
 
 
 if __name__ == "__main__":
