@@ -53,7 +53,7 @@ mkdir /results
 conda create -y -n {env_name} python={python_version} {env_packages}
 conda activate {env_name}
 
-git clone {git_url} {git_target}
+{git_command}
 {install_command}
 
 chmod -R 777 /code
@@ -468,20 +468,32 @@ class ExperimentConfig(object):
 
         """
 
+        # create an installation command for all the provided apt packages
+        apt_packages = ("\n".join(["apt-get install -y {package}"
+                        .format(package=p)
+                         for p in self.apt_packages]))
+
+        # download code with git if a repo is provided otherwise just make
+        # the corresponding folder where the code should have been
+        git_command = ("mkdir -p {git_target}"
+                       .format(git_target=self.git_target)
+                       if not self.git_url else
+                       "git clone {git_url} {git_target}"
+                       .format(git_url=self.git_url,
+                               git_target=self.git_target))
+
+        # write a singularity recipe file to the disk at the desired path
         with open(self.local_recipe, "w") as recipe_file:
             recipe_file.write(DEFAULT_RECIPE.format(
                 bootstrap=self.bootstrap,
                 bootstrap_from=self.bootstrap_from,
+                apt_packages=apt_packages,
                 anaconda_version=self.anaconda_version,
                 python_version=self.python_version,
                 env_name=self.env_name,
                 env_packages=self.env_packages,
-                git_url=self.git_url,
-                git_target=self.git_target,
-                install_command=self.install_command,
-                apt_packages="\n".join(["apt-get install -y {package}"
-                                       .format(package=p)
-                                        for p in self.apt_packages])))
+                git_command=git_command,
+                install_command=self.install_command))
 
     def write_singularity_image(self, **kwargs):
         """Using the provided class attributes, generate a singularity
@@ -1252,10 +1264,10 @@ def get(ssh_username: bool = False,
 
 @command_line_interface.command()
 @click.option('--rebuild', is_flag=True)
-@click.option('--sync', is_flag=True)
+@click.option('--sync/--no-sync', is_flag=True, default=None)
 @click.argument('commands', type=str, nargs=-1)
 def local(rebuild: bool = False,
-          sync: bool = False, commands: List[str] = ()):
+          sync: bool = None, commands: List[str] = ()):
     """Load the persistent experiment configuration file and launch an
     experiment locally by loading the singularity image and syncing local
     code with the code in the image and running commands.
@@ -1284,12 +1296,12 @@ def local(rebuild: bool = False,
 @click.option('--memory', type=int, default=16)
 @click.option('--num-hours', type=int, default=8)
 @click.option('--rebuild', is_flag=True)
-@click.option('--sync', is_flag=True)
+@click.option('--sync/--no-sync', is_flag=True, default=None)
 @click.argument('commands', type=str, nargs=-1)
 def remote(num_cpus: int = 4, num_gpus: int = 1,
            memory: int = 16, num_hours: int = 8,
            rebuild: bool = False,
-           sync: bool = False, commands: List[str] = ()):
+           sync: bool = None, commands: List[str] = ()):
     """Load the persistent experiment configuration file and launch an
     experiment remotely by loading the singularity image and syncing local
     code with the code in the remote image and running commands.
