@@ -62,5 +62,5 @@ Then run it on the cluster.
 singular remote --sync python /code/repo/do_my_experiment.py
 ```
 
-In this example, the sync flag tells singular to copy code from your repository on the local disk to code folder in your remote singularity image.
+In this example, the sync flag tells singular to copy code from your repository on the local disk to code folder in your remote singularity image. This is especially helpful when changes aren't committed.
 
