@@ -1327,5 +1327,75 @@ def remote(num_cpus: int = 4, num_gpus: int = 1,
                           memory=memory, num_hours=num_hours)
 
 
+@command_line_interface.command()
+@click.option('--recursive', is_flag=True)
+@click.option('--exclude', type=str, default="")
+@click.argument('source-path', type=str, nargs=1)
+@click.argument('destination-path', type=str, nargs=1)
+def upload(recursive: bool = False, exclude: str = "",
+           source_path: str = "", destination_path: str = ""):
+    """Load the persistent experiment configuration file and start copying
+    files from the source location on the local disk to the destination
+    path which is inside the singularity image on the host.
+
+    Arguments:
+
+    source_path: str
+        a string representing the path on the local disk to a file or
+        directory that will be copied from.
+    destination_path: str
+        a string representing the path on the remote disk to a file or
+        directory that will be copied into from a source.
+    recursive: bool
+        a boolean that controls whether rsync will be called with the
+        recursive option to copy a directory.
+    exclude: str
+        a string representing the file pattern for files to exclude
+        from the copy, such as data files.
+
+    """
+
+    with PersistentExperimentConfig() as config:
+        config.remote_rsync(source_path, os.path.join(
+            config.remote_image, destination_path),
+            recursive=recursive, exclude=exclude,
+            source_is_remote=False, destination_is_remote=True)
+
+
+@command_line_interface.command()
+@click.option('--recursive', is_flag=True)
+@click.option('--exclude', type=str, default="")
+@click.argument('source-path', type=str, nargs=1)
+@click.argument('destination-path', type=str, nargs=1)
+def download(recursive: bool = False, exclude: str = "",
+             source_path: str = "", destination_path: str = ""):
+    """Load the persistent experiment configuration file and start copying
+    files from the source location in the singularity image on the remote
+    disk to the destination path which is on the local disk
+
+    Arguments:
+
+    source_path: str
+        a string representing the path on the remote disk to a file or
+        directory that will be copied from.
+    destination_path: str
+        a string representing the path on the local disk to a file or
+        directory that will be copied into from a source.
+    recursive: bool
+        a boolean that controls whether rsync will be called with the
+        recursive option to copy a directory.
+    exclude: str
+        a string representing the file pattern for files to exclude
+        from the copy, such as data files.
+
+    """
+
+    with PersistentExperimentConfig() as config:
+        config.remote_rsync(os.path.join(config.remote_image, source_path),
+                            destination_path, recursive=recursive,
+                            exclude=exclude, source_is_remote=True,
+                            destination_is_remote=False)
+
+
 if __name__ == "__main__":
     command_line_interface()  # expose a public command line interface
