@@ -23,3 +23,15 @@ Running your first command on your cluster is then as simple as one line in the 
 ```bash
 singular remote echo "my first command"
 ```
+
+Certain workloads require uploading certain data files into the singularity image on the remote machine before running experiments. This can be done with the following command.
+
+```bash
+singular upload --recursive --exclude "*.pkl" ./local_dir remote_dir/in/image
+```
+
+Additionally, you can download files from the remote machine with a single command. The following command will download the results folder inside the remote singularity image to a location in the current local working directory. The remote path is always taken with respect to the singularity image path.
+
+```bash
+singular download --recursive --exclude "*.pkl" results ./
+```
