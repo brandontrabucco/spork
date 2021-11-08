@@ -4,7 +4,7 @@ Singular is a quality of life package that enables rapid deployment of code on a
 
 ## Installation
 
-Singular can be installed using pip.
+Singular can be installed using the pip package.
 
 ```bash
 pip install singular-launcher
@@ -12,7 +12,7 @@ pip install singular-launcher
 
 ## Usage
 
-You may configure singular to remember the ssh credentials to your remote cluster using the following example in the terminal.
+You may configure singular to remember the ssh credentials to your cluster using the following example.
 
 ```bash
 singular set --ssh-username username --ssh-password password --ssh-host compute.example.com
