@@ -621,22 +621,6 @@ class ExperimentConfig(object):
         # catch when the process finishes because it outputs the EOF token
         child.expect(EOF, timeout=DEFAULT_PROCESS_TIMEOUT)
 
-    def upload_singularity_recipe(self):
-        """Using the provided class attributes, generate and run a command in
-        a bash shell that will write a singularity recipe and copy it
-        from the local disk to a remote host machine.
-
-        """
-
-        # if the recipe does not exist locally then write it first
-        if not self.local_recipe_exists():
-            self.write_singularity_recipe()
-
-        # copy the singularity recipe file to the host
-        self.remote_rsync(os.path.join(self.local_recipe, "."),
-                          self.remote_recipe, source_is_remote=False,
-                          destination_is_remote=True, recursive=False)
-
     def upload_singularity_image(self, rebuild: bool = False):
         """Using the provided class attributes, generate and run a command in
         a bash shell that will write a singularity container and copy it
@@ -840,7 +824,8 @@ class ExperimentConfig(object):
         for line in iter(stdout.readline, ""):
             print(line)  # prints even if the command is not yet finished
 
-    def remote_run_in_slurm_shell(self, *commands: str):
+    def remote_shell(self, *commands: str,
+                     watch: bool = False, interval: float = 1.0):
         """Run a set of commands on the remote machine, which can be used to
         check on jobs that are scheduled or running on the host, and also to
         cancel jobs that are scheduled or running.
@@ -850,6 +835,12 @@ class ExperimentConfig(object):
         commands: List[str]
             a list of strings representing commands that are run on the host
             machine through an ssh connecting.
+        watch: bool
+            a boolean that controls whether the remote commands should be
+            executed repeatedly at a specified interval.
+        interval: float
+            a float that represents the amount of time in seconds between
+            successive commands when watch is set to True.
 
         """
 
@@ -870,6 +861,17 @@ class ExperimentConfig(object):
         # print the output from the terminal as the command runs
         for line in iter(stdout.readline, ""):
             print(line)  # prints even if the command is not yet finished
+
+        while watch:  # repeat the commands at an interval
+
+            # run the provided commands again in the shell on the host
+            time.sleep(interval)
+            stdout = client.exec_command(" && ".join(commands),
+                                         get_pty=True)[1]
+
+            # print the output from the terminal as the command runs
+            for line in iter(stdout.readline, ""):
+                print(line)  # prints even if the command is not finished
 
 
 # the default location for a config file to be stored on the local disk
@@ -1393,8 +1395,11 @@ def remote(num_cpus: int = 4, num_gpus: int = 1,
 
 @command_line_interface.command(
     context_settings=dict(ignore_unknown_options=True))
+@click.option('--interval', type=float, default=1.0)
+@click.option('--watch', is_flag=True)
 @click.argument('commands', type=str, nargs=-1)
-def slurm(commands: List[str] = ()):
+def shell(interval: float = 1.0,
+          watch: bool = False, commands: List[str] = ()):
     """Run a set of bash commands on the remote machine, which can be used to
     check on jobs that are scheduled or running on the host, and also to
     cancel jobs that are scheduled or running.
@@ -1404,11 +1409,18 @@ def slurm(commands: List[str] = ()):
     commands: List[str]
         a list of strings representing commands that are run on the host
         machine through an ssh connecting.
+    watch: bool
+        a boolean that controls whether the remote commands should be
+        executed repeatedly at a specified interval.
+    interval: float
+        a float that represents the amount of time in seconds between
+        successive commands when watch is set to True.
 
     """
 
     with PersistentExperimentConfig() as config:
-        config.remote_run_in_slurm_shell(" ".join(commands))
+        config.remote_shell(" ".join(commands),
+                            watch=watch, interval=interval)
 
 
 @command_line_interface.command()

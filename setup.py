@@ -21,18 +21,18 @@ CLASSIFIERS = [
     'Programming Language :: Python :: 3.8']
 
 
-URL = 'https://github.com/brandontrabucco/singular'
+URL = 'https://github.com/brandontrabucco/spork'
 
 
-setup(name='singular-launcher', version='1.0.6', license='MIT',
-      packages=find_packages(include=['singular', 'singular.*']),
-      description=('Singular API For Launching '
+setup(name='spork-cli', version='1.0.7', license='MIT',
+      packages=find_packages(include=['spork', 'spork.*']),
+      description=('CLI For Launching '
                    'Experiments Using Singularity On Slurm'),
       long_description=LONG_DESCRIPTION, classifiers=CLASSIFIERS,
       long_description_content_type='text/markdown',
       author='Brandon Trabucco', author_email='brandon@btrabucco.com',
-      url=URL, download_url=URL + '/archive/v1_0_6.tar.gz',
+      url=URL, download_url=URL + '/archive/v1_0_7.tar.gz',
       keywords=['Deep Learning', 'Research', 'Management'],
       install_requires=['click', 'paramiko', 'pexpect'],
       entry_points={'console_scripts': (
-          'singular=singular.experiment_config:command_line_interface',)})
+          'spork=spork.experiment_config:command_line_interface',)})
