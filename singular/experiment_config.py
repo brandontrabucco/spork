@@ -87,7 +87,7 @@ DEFAULT_REMOTE_IMAGE = "experiment.sif"
 # arguments that describe how to install the experiment code from github
 DEFAULT_GIT_URL = ""
 DEFAULT_GIT_TARGET = "/code/repo"
-DEFAULT_INSTALL_COMMAND = "pip install matplotlib"
+DEFAULT_INSTALL_COMMAND = "pip install ipdb"
 
 
 # information about how to sync code before running an experiment
@@ -108,7 +108,7 @@ SINGULARITY_EXEC_TEMPLATE = "singularity \
 # a template for launching an experiment using a slurm scheduler
 SLURM_SRUN_TEMPLATE = "sbatch --cpus-per-task={num_cpus} \
     --gres=gpu:{num_gpus} --mem={memory}g \
-    --time={num_hours}:00:00 -p {partition} {slurm_command}"
+    --time={num_hours}:00:00 -p {partition} --wrap=\'{slurm_command}\'"
 
 
 # credentials for logging in to the remote host using ssh
@@ -325,7 +325,7 @@ class ExperimentConfig(object):
 
         # locations for a singularity recipe and image to be written
         self.local_recipe = local_recipe
-        self.local_image = os.path.realpath(local_image)
+        self.local_image = local_image
         self.remote_recipe = remote_recipe
         self.remote_image = remote_image
 
@@ -408,7 +408,7 @@ class ExperimentConfig(object):
         else:
             return True  # stat finished and the file is present
 
-    def remote_recipe_exists(self) -> bool:
+    def remote_recipe_exists(self, client: paramiko.SSHClient = None) -> bool:
         """Utility function that checks the remote host for whether a
         singularity recipe with the given name already exists on the host
         at the desired location, and if so returns true.
@@ -421,19 +421,22 @@ class ExperimentConfig(object):
 
         """
 
-        # open an ssh connection to the remote host by logging in using the
-        # provided username and password for that machine
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(self.ssh_host, self.ssh_port,
-                       username=self.ssh_username, password=self.ssh_password,
-                       look_for_keys=False, allow_agent=False)
+        if client is None:
+
+            # open an ssh connection to the remote host by logging in using
+            # the provided username and password for that machine
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(self.ssh_host, self.ssh_port,
+                           username=self.ssh_username,
+                           password=self.ssh_password,
+                           look_for_keys=False, allow_agent=False)
 
         # open an sftp client and check if a file exists on the remote host
         with client.open_sftp() as sftp:
             return self.remote_path_exists(sftp, self.remote_recipe)
 
-    def remote_image_exists(self) -> bool:
+    def remote_image_exists(self, client: paramiko.SSHClient = None) -> bool:
         """Utility function that checks the remote host for whether a
         singularity image with the given name already exists on the host
         at the desired location, and if so returns true.
@@ -446,13 +449,16 @@ class ExperimentConfig(object):
 
         """
 
-        # open an ssh connection to the remote host by logging in using the
-        # provided username and password for that machine
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(self.ssh_host, self.ssh_port,
-                       username=self.ssh_username, password=self.ssh_password,
-                       look_for_keys=False, allow_agent=False)
+        if client is None:
+
+            # open an ssh connection to the remote host by logging in using
+            # the provided username and password for that machine
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(self.ssh_host, self.ssh_port,
+                           username=self.ssh_username,
+                           password=self.ssh_password,
+                           look_for_keys=False, allow_agent=False)
 
         # open an sftp client and check if a file exists on the remote host
         with client.open_sftp() as sftp:
@@ -675,9 +681,8 @@ class ExperimentConfig(object):
 
         return SINGULARITY_EXEC_TEMPLATE.format(
             singularity_command=" && ".join(
-                [". /anaconda3/etc/profile.d/conda.sh",
-                 "conda activate {}".format(self.env_name),
-                 "cd {}".format(self.git_target)] + [
+                [". /anaconda3/etc/profile.d/conda.sh", "conda activate {}"
+                 .format(self.env_name), "cd {}".format(self.git_target)] + [
                     command.format(git_target=self.git_target) for command in
                     list(self.init_commands) + list(commands)]), image=image)
 
@@ -803,8 +808,16 @@ class ExperimentConfig(object):
 
         """
 
+        # open an ssh connection to the remote host by logging in using the
+        # provided username and password for that machine
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(self.ssh_host, self.ssh_port,
+                       username=self.ssh_username, password=self.ssh_password,
+                       look_for_keys=False, allow_agent=False)
+
         # if the image does not exist on the remote then upload it first
-        if not self.remote_image_exists() or rebuild:
+        if not self.remote_image_exists(client=client) or rebuild:
             self.upload_singularity_image()  # build the singularity image
 
         # copy the local code directory to the remote singularity image
@@ -813,14 +826,6 @@ class ExperimentConfig(object):
                 self.remote_image, self.git_target[1:]),
                 recursive=True, exclude=self.exclude_from_sync,
                 source_is_remote=False, destination_is_remote=True)
-
-        # open an ssh connection to the remote host by logging in using the
-        # provided username and password for that machine
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(self.ssh_host, self.ssh_port,
-                       username=self.ssh_username, password=self.ssh_password,
-                       look_for_keys=False, allow_agent=False)
 
         # sleep in order to avoid sending too many commands to the server
         time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
@@ -1091,7 +1096,7 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         if local_recipe is not None:
             config.local_recipe = local_recipe
         if local_image is not None:
-            config.local_image = os.path.realpath(local_image)
+            config.local_image = local_image
         if remote_recipe is not None:
             config.remote_recipe = remote_recipe
         if remote_image is not None:
