@@ -844,6 +844,12 @@ class ExperimentConfig(object):
 
         """
 
+        # a function that makes printed output look like the watch utility
+        def clear_and_print_header():
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print("Every {interval}s: {commands}\n"
+                  .format(interval=interval, commands=commands))
+
         # open an ssh connection to the remote host by logging in using the
         # provided username and password for that machine
         client = paramiko.SSHClient()
@@ -852,25 +858,26 @@ class ExperimentConfig(object):
                        username=self.ssh_username, password=self.ssh_password,
                        look_for_keys=False, allow_agent=False)
 
-        # sleep in order to avoid sending too many commands to the server
-        time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
-
         # generate a command to launch a remote experiment using slurm
-        stdout = client.exec_command(" && ".join(commands), get_pty=True)[1]
+        time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
+        commands = " && ".join(commands)
+        stdout = client.exec_command(commands, get_pty=True)[1]
 
-        # print the output from the terminal as the command runs
-        for line in iter(stdout.readline, ""):
+        # print intermediate outputs into the terminal as the command runs
+        for i, line in enumerate(iter(stdout.readline, "")):
+            if i == 0 and watch:
+                clear_and_print_header()
             print(line)  # prints even if the command is not yet finished
 
         while watch:  # repeat the commands at an interval
-
             # run the provided commands again in the shell on the host
             time.sleep(interval)
-            stdout = client.exec_command(" && ".join(commands),
-                                         get_pty=True)[1]
+            stdout = client.exec_command(commands, get_pty=True)[1]
 
-            # print the output from the terminal as the command runs
-            for line in iter(stdout.readline, ""):
+            # print intermediate outputs into terminal as the command runs
+            for i, line in enumerate(iter(stdout.readline, "")):
+                if i == 0:
+                    clear_and_print_header()
                 print(line)  # prints even if the command is not finished
 
 
