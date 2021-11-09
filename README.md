@@ -1,4 +1,4 @@
-# A spork Experiment Launcher
+# Spork: Helping You Run Slurm Jobs
 
 Spork is a quality of life package that enables rapid deployment of code on a slurm cluster with singularity installed and password enabled login. Running experiments on your cluster is as simple as a single command in the terminal using spork. See below for an example and install instructions.
 
