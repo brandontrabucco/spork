@@ -47,28 +47,27 @@ python do_my_experiment.py
 Once your code is ready for deployment, tell spork how to install your code from github.
 
 ```bash
-spork set --git-url https://github.com/username/repo
-spork set --git-target /code/repo
-spork set --install-command "pip install -e {git_target}"
+spork set --post-env-commands "git clone https://github.com/username/repo /code/repo" \
+          --post-env-commands "pip install -e /code/repo"
 ```
 
 Then, point spork to where your code working directory is stored locally.
 
 ```bash
-spork set --sync-from /home/username/repo
+spork set --sync-with ./ --sync-target /code/repo --exclude-from-sync "*.sif"
 ```
 
 Then test your code in a local copy of the singularity to make sure it works as expected.
 
 ```bash
-spork local --sync python /code/repo/do_my_experiment.py
+spork local python /code/repo/do_my_experiment.py
 ```
 
 Then run it on the cluster.
 
 ```bash
-spork remote --sync python /code/repo/do_my_experiment.py
+spork remote python /code/repo/do_my_experiment.py
 ```
 
-In this example, the sync flag tells spork to copy code from your repository on the local disk to code folder in your remote singularity image. This is especially helpful when changes aren't committed.
+In this example, spork will automatically copy code from your repository on the local disk to code folder in your remote singularity image. This is especially helpful when changes aren't committed.
 
