@@ -1,6 +1,7 @@
 import time
 import sys
 import os
+import subprocess
 import paramiko
 import pickle as pkl
 import click
@@ -16,15 +17,10 @@ From: {bootstrap_from}
 
 %post
 
-#Add nvidia driver paths to the environment variables
-echo "\n #Nvidia driver paths \n" >> /environment
 echo 'export PATH="/nvbin:$PATH"' >> /environment
-echo 'export LD_LIBRARY_PATH="/nvlib:$LD_LIBRARY_PATH"' >> /environment
-
-#Add CUDA paths
-echo "\n #Cuda paths \n" >> /environment
-echo 'export CPATH="/usr/local/cuda/include:$CPATH"' >> /environment
 echo 'export PATH="/usr/local/cuda/bin:$PATH"' >> /environment
+echo 'export CPATH="/usr/local/cuda/include:$CPATH"' >> /environment
+echo 'export LD_LIBRARY_PATH="/nvlib:$LD_LIBRARY_PATH"' >> /environment
 echo 'export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"' >> /environment
 echo 'export CUDA_HOME="/usr/local/cuda"' >> /environment
 
@@ -35,27 +31,29 @@ touch /usr/bin/nvidia-persistenced
 touch /usr/bin/nvidia-cuda-mps-control
 touch /usr/bin/nvidia-cuda-mps-server
 
-mkdir /etc/dcv
-mkdir /var/lib/dcv-gl
-mkdir /usr/lib64
+mkdir -p /etc/dcv
+mkdir -p /var/lib/dcv-gl
+mkdir -p /usr/lib64
+mkdir -p /code
+mkdir -p /results
 
-apt-get update -y
-{apt_packages}
+{before_apt_commands}
+
+apt-get update -y && {apt_packages}
+
+{post_apt_commands}
 
 wget https://repo.anaconda.com/archive/Anaconda3-{anaconda_version}-Linux-x86_64.sh -O /anaconda3.sh
-bash /anaconda3.sh -b -p /anaconda3
-rm /anaconda3.sh
-
+bash /anaconda3.sh -b -p /anaconda3 && rm /anaconda3.sh
 . /anaconda3/etc/profile.d/conda.sh
+conda update -y conda
 
-mkdir /code
-mkdir /results
+{before_env_commands}
 
-conda create -y -n {env_name} python={python_version} {env_packages}
+conda create -y -n {env_name} python={python_version} {env_create_arguments}
 conda activate {env_name}
 
-{git_command}
-{install_command}
+{post_env_commands}
 
 chmod -R 777 /code
 chmod -R 777 /results
@@ -66,15 +64,15 @@ chmod -R 777 /anaconda3"""
 DEFAULT_BOOTSTRAP = "docker"
 DEFAULT_BOOTSTRAP_FROM = "nvidia/cuda:11.3.1-cudnn8-devel-ubuntu16.04"
 DEFAULT_APT_PACKAGES = ("unzip", "htop", "wget",
-                        "git", "vim", "build-essential")
+                        "git", "vim", "cmake", "gcc", "g++")
 
 
 # arguments that describe the conda environment to build
 DEFAULT_ANACONDA_VERSION = "2021.05"
-DEFAULT_PYTHON_VERSION = "3.7"
+DEFAULT_PYTHON_VERSION = "3.8"
 DEFAULT_ENV_NAME = "venv"
-DEFAULT_ENV_PACKAGES = "pytorch torchvision " \
-                       "torchaudio cudatoolkit=11.3 -c pytorch"
+DEFAULT_ENV_CREATE_ARGUMENTS = \
+    "pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch"
 
 
 # a default location for the singularity image and singularity recipe
@@ -84,16 +82,20 @@ DEFAULT_REMOTE_RECIPE = "experiment.recipe"
 DEFAULT_REMOTE_IMAGE = "experiment.sif"
 
 
-# arguments that describe how to install the experiment code from github
-DEFAULT_GIT_URL = ""
-DEFAULT_GIT_TARGET = "/code/repo"
-DEFAULT_INSTALL_COMMAND = "pip install ipdb"
+# commands that are run before and after apt packages are installed
+DEFAULT_BEFORE_APT_COMMANDS = ()
+DEFAULT_POST_APT_COMMANDS = ()
+
+
+# commands that are run before and after the conda environment is created
+DEFAULT_BEFORE_ENV_COMMANDS = ()
+DEFAULT_POST_ENV_COMMANDS = ()
 
 
 # information about how to sync code before running an experiment
-DEFAULT_SYNC = False
-DEFAULT_SYNC_WITH = ""
-DEFAULT_EXCLUDE_FROM_SYNC = "*.pkl"
+DEFAULT_SYNC_WITH = ()
+DEFAULT_SYNC_TARGET = ()
+DEFAULT_EXCLUDE_FROM_SYNC = ()
 
 
 # a default command that may be run in the container
@@ -101,8 +103,8 @@ DEFAULT_INIT_COMMANDS = ()
 
 
 # a template for running experiment commands in the container
-SINGULARITY_EXEC_TEMPLATE = "singularity \
-    exec --nv -w {image} bash -c \"{singularity_command}\""
+SINGULARITY_EXEC_TEMPLATE = \
+    "singularity exec --nv -w {image} bash -c \"{singularity_command}\""
 
 
 # a template for launching an experiment using a slurm scheduler
@@ -143,23 +145,6 @@ class ExperimentConfig(object):
         an integer representing the port on the remote machine to use
         when connecting to the machine to launch jobs.
 
-    bootstrap: str
-        whether to bootstrap this singularity image from docker, and
-        is set to 'docker' if this is the case.
-    bootstrap_from: str
-        the source to bootstrap from, which is the name of a docker
-        container is bootstrapping from docker as above.
-
-    apt_packages: List[str]
-        a list of strings representing the names of apt packages to be
-        installed in the current singularity image.
-    anaconda_version: str
-        the version number of the anaconda package to install, which
-        can be set to 2021.05 as a simple default.
-    python_version: str
-        the version number of the python interpreter to install, which
-        can be set to 3.7 as a simple default.
-
     local_recipe: str
         the location on the disk to write a singularity recipe file
         which will be used later to build a singularity image.
@@ -173,30 +158,49 @@ class ExperimentConfig(object):
         the location on the host to write a singularity image, which will
         be launched when running experiments.
 
+    before_apt_commands: List[str]
+        a list of commands to run while building the singularity image
+        before apt packages are installed.
+    post_apt_commands: List[str]
+        a list of commands to run while building the singularity image
+        after all apt packages have been installed.
+    before_env_commands: List[str]
+        a list of commands to run while building the singularity image
+        before conda is downloaded and the env is created.
+    post_env_commands: List[str]
+        a list of commands to run while building the singularity image
+        after conda is downloaded and the env has been created.
+
+    bootstrap: str
+        whether to bootstrap this singularity image from docker, and
+        is set to 'docker' if this is the case.
+    bootstrap_from: str
+        the source to bootstrap from, which is the name of a docker
+        container is bootstrapping from docker as above.
+    apt_packages: List[str]
+        a list of strings representing the names of apt packages to be
+        installed in the current singularity image.
+
+    anaconda_version: str
+        the version number of the anaconda package to install, which
+        can be set to 2021.05 as a simple default.
+    python_version: str
+        the version number of the python interpreter to install, which
+        can be set to 3.7 as a simple default.
     env_name: str
         the name of the conda environment to build for this experiment
         which can simply be the name of the code-base.
-    env_packages: str
+    env_create_packages: str
         a string representing the names and channels of conda packages to
         be installed when creating the associated conda environment.
 
-    git_url: str
-        a string representing the url where the experiment code is
-        available for download using a git clone command.
-    git_target: str
-        a string representing the path on disk where the code will be
-        cloned into, and experiments will be ran from.
-    install_command: str
-        a string that instructs singularity how to install the experiment
-        code, which can be as simple as a pip or conda install.
-
-    sync: bool
-        a boolean that controls whether to sync the contents of the local
-        code working directory to the singularity image.
-    sync_with: str
+    sync_with: List[str]
         a string representing the path on disk where uncommitted code is
         stored and can be copied before starting experiments.
-    exclude_from_sync: str
+    sync_target: List[str]
+        a string representing the path on disk where the code will be
+        synced into, and experiments will be ran from.
+    exclude_from_sync: List[str]
         a string representing the file pattern of files to exclude when
         synchronizing code with the singularity image.
 
@@ -210,23 +214,24 @@ class ExperimentConfig(object):
                  ssh_password: str = DEFAULT_SSH_PASSWORD,
                  ssh_host: str = DEFAULT_SSH_HOST,
                  ssh_port: int = DEFAULT_SSH_PORT,
+                 local_recipe: str = DEFAULT_LOCAL_RECIPE,
+                 local_image: str = DEFAULT_LOCAL_IMAGE,
+                 remote_recipe: str = DEFAULT_REMOTE_RECIPE,
+                 remote_image: str = DEFAULT_REMOTE_IMAGE,
+                 before_apt_commands: List[str] = DEFAULT_BEFORE_APT_COMMANDS,
+                 post_apt_commands: List[str] = DEFAULT_POST_APT_COMMANDS,
+                 before_env_commands: List[str] = DEFAULT_BEFORE_ENV_COMMANDS,
+                 post_env_commands: List[str] = DEFAULT_POST_ENV_COMMANDS,
                  bootstrap: str = DEFAULT_BOOTSTRAP,
                  bootstrap_from: str = DEFAULT_BOOTSTRAP_FROM,
                  apt_packages: List[str] = DEFAULT_APT_PACKAGES,
                  anaconda_version: str = DEFAULT_ANACONDA_VERSION,
                  python_version: str = DEFAULT_PYTHON_VERSION,
-                 local_recipe: str = DEFAULT_LOCAL_RECIPE,
-                 local_image: str = DEFAULT_LOCAL_IMAGE,
-                 remote_recipe: str = DEFAULT_REMOTE_RECIPE,
-                 remote_image: str = DEFAULT_REMOTE_IMAGE,
                  env_name: str = DEFAULT_ENV_NAME,
-                 env_packages: str = DEFAULT_ENV_PACKAGES,
-                 git_url: str = DEFAULT_GIT_URL,
-                 git_target: str = DEFAULT_GIT_TARGET,
-                 install_command: str = DEFAULT_INSTALL_COMMAND,
-                 sync: bool = DEFAULT_SYNC,
-                 sync_with: str = DEFAULT_SYNC_WITH,
-                 exclude_from_sync: str = DEFAULT_EXCLUDE_FROM_SYNC,
+                 env_create_arguments: str = DEFAULT_ENV_CREATE_ARGUMENTS,
+                 sync_with: List[str] = DEFAULT_SYNC_WITH,
+                 sync_target: List[str] = DEFAULT_SYNC_TARGET,
+                 exclude_from_sync: List[str] = DEFAULT_EXCLUDE_FROM_SYNC,
                  init_commands: List[str] = DEFAULT_INIT_COMMANDS):
         """Create an experiment singularity image that manages packages and
         runs experiments in a reproducible and distributable container,
@@ -247,23 +252,6 @@ class ExperimentConfig(object):
             an integer representing the port on the remote machine to use
             when connecting to the machine to launch jobs.
 
-        bootstrap: str
-            whether to bootstrap this singularity image from docker, and
-            is set to 'docker' if this is the case.
-        bootstrap_from: str
-            the source to bootstrap from, which is the name of a docker
-            container is bootstrapping from docker as above.
-
-        apt_packages: List[str]
-            a list of strings representing the names of apt packages to be
-            installed in the current singularity image.
-        anaconda_version: str
-            the version number of the anaconda package to install, which
-            can be set to 2021.05 as a simple default.
-        python_version: str
-            the version number of the python interpreter to install, which
-            can be set to 3.7 as a simple default.
-
         local_recipe: str
             the location on the disk to write a singularity recipe file
             which will be used later to build a singularity image.
@@ -277,30 +265,49 @@ class ExperimentConfig(object):
             the location on the host to write a singularity image, which will
             be launched when running experiments.
 
+        before_apt_commands: List[str]
+            a list of commands to run while building the singularity image
+            before apt packages are installed.
+        post_apt_commands: List[str]
+            a list of commands to run while building the singularity image
+            after all apt packages have been installed.
+        before_env_commands: List[str]
+            a list of commands to run while building the singularity image
+            before conda is downloaded and the env is created.
+        post_env_commands: List[str]
+            a list of commands to run while building the singularity image
+            after conda is downloaded and the env has been created.
+
+        bootstrap: str
+            whether to bootstrap this singularity image from docker, and
+            is set to 'docker' if this is the case.
+        bootstrap_from: str
+            the source to bootstrap from, which is the name of a docker
+            container is bootstrapping from docker as above.
+        apt_packages: List[str]
+            a list of strings representing the names of apt packages to be
+            installed in the current singularity image.
+
+        anaconda_version: str
+            the version number of the anaconda package to install, which
+            can be set to 2021.05 as a simple default.
+        python_version: str
+            the version number of the python interpreter to install, which
+            can be set to 3.7 as a simple default.
         env_name: str
             the name of the conda environment to build for this experiment
             which can simply be the name of the code-base.
-        env_packages: str
+        env_create_packages: str
             a string representing the names and channels of conda packages to
             be installed when creating the associated conda environment.
 
-        git_url: str
-            a string representing the url where the experiment code is
-            available for download using a git clone command.
-        git_target: str
-            a string representing the path on disk where the code will be
-            cloned into, and experiments will be ran from.
-        install_command: str
-            a string that instructs singularity how to install the experiment
-            code, which can be as simple as a pip or conda install.
-
-        sync: bool
-            a boolean that controls whether to sync the contents of the local
-            code working directory to the singularity image.
-        sync_with: str
+        sync_with: List[str]
             a string representing the path on disk where uncommitted code is
             stored and can be copied before starting experiments.
-        exclude_from_sync: str
+        sync_target: List[str]
+            a string representing the path on disk where the code will be
+            synced into, and experiments will be ran from.
+        exclude_from_sync: List[str]
             a string representing the file pattern of files to exclude when
             synchronizing code with the singularity image.
 
@@ -316,32 +323,35 @@ class ExperimentConfig(object):
         self.ssh_host = ssh_host
         self.ssh_port = ssh_port
 
-        # global arguments for the singularity image package environment
-        self.bootstrap = bootstrap
-        self.bootstrap_from = bootstrap_from
-        self.apt_packages = apt_packages
-        self.anaconda_version = anaconda_version
-        self.python_version = python_version
-
         # locations for a singularity recipe and image to be written
         self.local_recipe = local_recipe
         self.local_image = local_image
         self.remote_recipe = remote_recipe
         self.remote_image = remote_image
 
-        # arguments that specify the package environment for the source code
-        self.env_name = env_name
-        self.env_packages = env_packages
+        # additional commands to run when building the singularity image
+        self.before_apt_commands = before_apt_commands
+        self.post_apt_commands = post_apt_commands
+        self.before_env_commands = before_env_commands
+        self.post_env_commands = post_env_commands
 
-        # arguments that specify where and how to install source code
-        self.git_url = git_url
-        self.git_target = git_target
-        self.install_command = install_command
+        # global arguments for the singularity image package environment
+        self.bootstrap = bootstrap
+        self.bootstrap_from = bootstrap_from
+        self.apt_packages = apt_packages
+
+        # arguments that specify the package environment for the source code
+        self.anaconda_version = anaconda_version
+        self.python_version = python_version
+        self.env_name = env_name
+        self.env_create_arguments = env_create_arguments
+
+        # commands that specify how to update code within the image
+        self.sync_with = sync_with
+        self.sync_target = sync_target
+        self.exclude_from_sync = exclude_from_sync
 
         # arguments that specify how to sync code before an experiment
-        self.sync = sync
-        self.sync_with = sync_with
-        self.exclude_from_sync = exclude_from_sync
         self.init_commands = init_commands
 
     def local_recipe_exists(self) -> bool:
@@ -472,32 +482,23 @@ class ExperimentConfig(object):
         """
 
         # create an installation command for all the provided apt packages
-        apt_packages = ("\n".join(["apt-get install -y {package}"
-                        .format(package=p)
-                         for p in self.apt_packages]))
-
-        # download code with git if a repo is provided otherwise just make
-        # the corresponding folder where the code should have been
-        git_command = ("mkdir -p {git_target}"
-                       .format(git_target=self.git_target)
-                       if not self.git_url else
-                       "git clone {git_url} {git_target}"
-                       .format(git_url=self.git_url,
-                               git_target=self.git_target))
+        apt_packages = ("apt-get install -y {apt_packages}"
+                        .format(apt_packages=" ".join(self.apt_packages)))
 
         # write a singularity recipe file to the disk at the desired path
         with open(self.local_recipe, "w") as recipe_file:
             recipe_file.write(DEFAULT_RECIPE.format(
                 bootstrap=self.bootstrap,
                 bootstrap_from=self.bootstrap_from,
+                before_apt_commands="\n".join(self.before_apt_commands),
                 apt_packages=apt_packages,
+                post_apt_commands="\n".join(self.post_apt_commands),
                 anaconda_version=self.anaconda_version,
+                before_env_commands="\n".join(self.before_env_commands),
                 python_version=self.python_version,
                 env_name=self.env_name,
-                env_packages=self.env_packages,
-                git_command=git_command,
-                install_command=self.install_command
-                .format(git_target=self.git_target)))
+                env_create_arguments=self.env_create_arguments,
+                post_env_commands="\n".join(self.post_env_commands)))
 
     def write_singularity_image(self, **kwargs):
         """Using the provided class attributes, generate a singularity
@@ -665,13 +666,11 @@ class ExperimentConfig(object):
 
         return SINGULARITY_EXEC_TEMPLATE.format(
             singularity_command=" && ".join(
-                [". /anaconda3/etc/profile.d/conda.sh", "conda activate {}"
-                 .format(self.env_name), "cd {}".format(self.git_target)] + [
-                    command.format(git_target=self.git_target) for command in
-                    list(self.init_commands) + list(commands)]), image=image)
+                [". /anaconda3/etc/profile.d/conda.sh",
+                 "conda activate {}".format(self.env_name)] +
+                list(self.init_commands) + list(commands)), image=image)
 
-    def local_run(self, *commands: str,
-                  sync: bool = None, rebuild: bool = False):
+    def local_run(self, *commands: str, rebuild: bool = False):
         """Generate and run a command in the bash shell that starts a
         singularity container locally and runs commands in that container
         and prints outputs to the standard output stream.
@@ -681,24 +680,29 @@ class ExperimentConfig(object):
         commands: List[str]
             a list of strings representing commands that are run within the
             container once all setup commands are finished.
-        sync: bool
-            a boolean that controls whether to sync the contents of the local
-            code working directory to the singularity image.
         rebuild: bool
             a boolean that controls whether the singularity image should be
             rebuilt even if it already exists on the disk.
 
         """
 
+        # if the image is being rebuilt then delete the existing image
+        if rebuild and self.local_image_exists():
+            stdout = os.popen("rm -rf {} && rm {}"
+                              .format(self.local_image, self.local_recipe))
+            for line in iter(stdout.readline, ""):
+                print(line)  # prints even if the command is not finished
+
         # if the recipe does not exist locally then write it first
-        if not self.local_image_exists() or rebuild:
+        if rebuild or not self.local_image_exists():
             self.write_singularity_image()  # build the singularity image
 
         # copy the local code directory to the local singularity image
-        if sync if sync is not None else self.sync:
-            self.local_rsync(os.path.join(self.sync_with, "."), os.path.join(
-                self.local_image, self.git_target[1:]),
-                recursive=True, exclude=self.exclude_from_sync)
+        for sync_with, sync_target, exclude_from_sync in zip(
+                self.sync_with, self.sync_target, self.exclude_from_sync):
+            self.local_rsync(os.path.join(sync_with, "."), os.path.join(
+                self.local_image, sync_target[1:]),
+                recursive=True, exclude=exclude_from_sync)
 
         # start an experiment locally using a local singularity container
         stdout = os.popen(self.run_in_singularity(*commands,
@@ -754,10 +758,9 @@ class ExperimentConfig(object):
             num_hours=num_hours, memory=memory,
             slurm_command=self.run_in_singularity(*commands, image=image))
 
-    def remote_run(self, *commands: str, sync: bool = None,
-                   rebuild: bool = False, partition: str = "russ_reserved",
-                   num_cpus: int = 4, num_gpus: int = 1,
-                   memory: int = 16, num_hours: int = 8):
+    def remote_run(self, *commands: str, rebuild: bool = False,
+                   partition: str = "russ_reserved", num_cpus: int = 4,
+                   num_gpus: int = 1, memory: int = 16, num_hours: int = 8):
         """Generate and run a command in the bash shell that starts a
         singularity container remotely and runs commands in that container
         and prints outputs to the standard output stream.
@@ -767,9 +770,6 @@ class ExperimentConfig(object):
         commands: List[str]
             a list of strings representing commands that are run within the
             container once all setup commands are finished.
-        sync: bool
-            a boolean that controls whether to sync the contents of the local
-            code working directory to the singularity image.
         rebuild: bool
             a boolean that controls whether the singularity image should be
             rebuilt even if it already exists on the disk.
@@ -800,15 +800,21 @@ class ExperimentConfig(object):
                        username=self.ssh_username, password=self.ssh_password,
                        look_for_keys=False, allow_agent=False)
 
+        # if the image is being rebuilt then delete the existing image
+        if rebuild and self.local_image_exists():
+            self.remote_shell("rm -rf {} && rm {}".format(
+                self.remote_image, self.remote_recipe), client=client)
+
         # if the image does not exist on the remote then upload it first
-        if not self.remote_image_exists(client=client) or rebuild:
+        if rebuild or not self.remote_image_exists(client=client):
             self.upload_singularity_image()  # build the singularity image
 
         # copy the local code directory to the remote singularity image
-        if sync if sync is not None else self.sync:
-            self.remote_rsync(os.path.join(self.sync_with, "."), os.path.join(
-                self.remote_image, self.git_target[1:]),
-                recursive=True, exclude=self.exclude_from_sync,
+        for sync_with, sync_target, exclude_from_sync in zip(
+                self.sync_with, self.sync_target, self.exclude_from_sync):
+            self.remote_rsync(os.path.join(sync_with, "."), os.path.join(
+                self.remote_image, sync_target[1:]),
+                recursive=True, exclude=exclude_from_sync,
                 source_is_remote=False, destination_is_remote=True)
 
         # sleep in order to avoid sending too many commands to the server
@@ -824,7 +830,7 @@ class ExperimentConfig(object):
         for line in iter(stdout.readline, ""):
             print(line)  # prints even if the command is not yet finished
 
-    def remote_shell(self, *commands: str,
+    def remote_shell(self, *commands: str, client: paramiko.SSHClient = None,
                      watch: bool = False, interval: float = 1.0):
         """Run a set of commands on the remote machine, which can be used to
         check on jobs that are scheduled or running on the host, and also to
@@ -850,15 +856,18 @@ class ExperimentConfig(object):
             print("Every {interval}s: {commands}\n"
                   .format(interval=interval, commands=commands))
 
-        # open an ssh connection to the remote host by logging in using the
-        # provided username and password for that machine
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(self.ssh_host, self.ssh_port,
-                       username=self.ssh_username, password=self.ssh_password,
-                       look_for_keys=False, allow_agent=False)
+        if client is None:
 
-        # generate a command to launch a remote experiment using slurm
+            # open an ssh connection to the remote host by logging in using
+            # the provided username and password for that machine
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(self.ssh_host, self.ssh_port,
+                           username=self.ssh_username,
+                           password=self.ssh_password,
+                           look_for_keys=False, allow_agent=False)
+
+        # generate a command to that runs on the remote machine over ssh
         time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
         commands = " && ".join(commands)
         stdout = client.exec_command(commands, get_pty=True)[1]
@@ -957,46 +966,66 @@ def command_line_interface():
 @click.option('--ssh-password', type=str, default=None)
 @click.option('--ssh-host', type=str, default=None)
 @click.option('--ssh-port', type=int, default=None)
-@click.option('--bootstrap', type=str, default=None)
-@click.option('--bootstrap-from', type=str, default=None)
-@click.option('--apt-packages', type=str, default=None, multiple=True)
-@click.option('--anaconda-version', type=str, default=None)
-@click.option('--python-version', type=str, default=None)
 @click.option('--local-recipe', type=str, default=None)
 @click.option('--local-image', type=str, default=None)
 @click.option('--remote-recipe', type=str, default=None)
 @click.option('--remote-image', type=str, default=None)
+@click.option('--before-apt-commands', type=str, default=None, multiple=True)
+@click.option('--no-before-apt-commands', is_flag=True)
+@click.option('--post-apt-commands', type=str, default=None, multiple=True)
+@click.option('--no-post-apt-commands', is_flag=True)
+@click.option('--before-env-commands', type=str, default=None, multiple=True)
+@click.option('--no-before-env-commands', is_flag=True)
+@click.option('--post-env-commands', type=str, default=None, multiple=True)
+@click.option('--no-post-env-commands', is_flag=True)
+@click.option('--bootstrap', type=str, default=None)
+@click.option('--bootstrap-from', type=str, default=None)
+@click.option('--apt-packages', type=str, default=None, multiple=True)
+@click.option('--no-apt-packages', is_flag=True)
+@click.option('--anaconda-version', type=str, default=None)
+@click.option('--python-version', type=str, default=None)
 @click.option('--env-name', type=str, default=None)
-@click.option('--env-packages', type=str, default=None)
-@click.option('--git-url', type=str, default=None)
-@click.option('--git-target', type=str, default=None)
-@click.option('--install-command', type=str, default=None)
-@click.option('--sync', type=bool, default=None)
-@click.option('--sync-with', type=str, default=None)
-@click.option('--exclude-from-sync', type=str, default=None)
+@click.option('--env-create-arguments', type=str, default=None)
+@click.option('--sync-with', type=str, default=None, multiple=True)
+@click.option('--no-sync-with', is_flag=True)
+@click.option('--sync-target', type=str, default=None, multiple=True)
+@click.option('--no-sync-target', is_flag=True)
+@click.option('--exclude-from-sync', type=str, default=None, multiple=True)
+@click.option('--no-exclude-from-sync', is_flag=True)
 @click.option('--init-commands', type=str, default=None, multiple=True)
+@click.option('--no-init-commands', is_flag=True)
 def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         ssh_password: str = DEFAULT_SSH_PASSWORD,
         ssh_host: str = DEFAULT_SSH_HOST,
         ssh_port: int = DEFAULT_SSH_PORT,
-        bootstrap: str = DEFAULT_BOOTSTRAP,
-        bootstrap_from: str = DEFAULT_BOOTSTRAP_FROM,
-        apt_packages: List[str] = DEFAULT_APT_PACKAGES,
-        anaconda_version: str = DEFAULT_ANACONDA_VERSION,
-        python_version: str = DEFAULT_PYTHON_VERSION,
         local_recipe: str = DEFAULT_LOCAL_RECIPE,
         local_image: str = DEFAULT_LOCAL_IMAGE,
         remote_recipe: str = DEFAULT_REMOTE_RECIPE,
         remote_image: str = DEFAULT_REMOTE_IMAGE,
+        before_apt_commands: List[str] = DEFAULT_BEFORE_APT_COMMANDS,
+        no_before_apt_commands: bool = False,
+        post_apt_commands: List[str] = DEFAULT_POST_APT_COMMANDS,
+        no_post_apt_commands: bool = False,
+        before_env_commands: List[str] = DEFAULT_BEFORE_ENV_COMMANDS,
+        no_before_env_commands: bool = False,
+        post_env_commands: List[str] = DEFAULT_POST_ENV_COMMANDS,
+        no_post_env_commands: bool = False,
+        bootstrap: str = DEFAULT_BOOTSTRAP,
+        bootstrap_from: str = DEFAULT_BOOTSTRAP_FROM,
+        apt_packages: List[str] = DEFAULT_APT_PACKAGES,
+        no_apt_packages: bool = False,
+        anaconda_version: str = DEFAULT_ANACONDA_VERSION,
+        python_version: str = DEFAULT_PYTHON_VERSION,
         env_name: str = DEFAULT_ENV_NAME,
-        env_packages: str = DEFAULT_ENV_PACKAGES,
-        git_url: str = DEFAULT_GIT_URL,
-        git_target: str = DEFAULT_GIT_TARGET,
-        install_command: str = DEFAULT_INSTALL_COMMAND,
-        sync: bool = DEFAULT_SYNC,
-        sync_with: str = DEFAULT_SYNC_WITH,
-        exclude_from_sync: str = DEFAULT_EXCLUDE_FROM_SYNC,
-        init_commands: List[str] = DEFAULT_INIT_COMMANDS):
+        env_create_arguments: str = DEFAULT_ENV_CREATE_ARGUMENTS,
+        sync_with: List[str] = DEFAULT_SYNC_WITH,
+        no_sync_with: bool = False,
+        sync_target: List[str] = DEFAULT_SYNC_TARGET,
+        no_sync_target: bool = False,
+        exclude_from_sync: List[str] = DEFAULT_EXCLUDE_FROM_SYNC,
+        no_exclude_from_sync: bool = False,
+        init_commands: List[str] = DEFAULT_INIT_COMMANDS,
+        no_init_commands: bool = False):
     """Assign new parameters to the persistent experiment config by loading
     the config from the disk and accepting new parameters for the config
     via a command line interface exposes to the shell.
@@ -1016,23 +1045,6 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         an integer representing the port on the remote machine to use
         when connecting to the machine to launch jobs.
 
-    bootstrap: str
-        whether to bootstrap this singularity image from docker, and
-        is set to 'docker' if this is the case.
-    bootstrap_from: str
-        the source to bootstrap from, which is the name of a docker
-        container is bootstrapping from docker as above.
-
-    apt_packages: List[str]
-        a list of strings representing the names of apt packages to be
-        installed in the current singularity image.
-    anaconda_version: str
-        the version number of the anaconda package to install, which
-        can be set to 2021.05 as a simple default.
-    python_version: str
-        the version number of the python interpreter to install, which
-        can be set to 3.7 as a simple default.
-
     local_recipe: str
         the location on the disk to write a singularity recipe file
         which will be used later to build a singularity image.
@@ -1046,30 +1058,49 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         the location on the host to write a singularity image, which will
         be launched when running experiments.
 
+    before_apt_commands: List[str]
+        a list of commands to run while building the singularity image
+        before apt packages are installed.
+    post_apt_commands: List[str]
+        a list of commands to run while building the singularity image
+        after all apt packages have been installed.
+    before_env_commands: List[str]
+        a list of commands to run while building the singularity image
+        before conda is downloaded and the env is created.
+    post_env_commands: List[str]
+        a list of commands to run while building the singularity image
+        after conda is downloaded and the env has been created.
+
+    bootstrap: str
+        whether to bootstrap this singularity image from docker, and
+        is set to 'docker' if this is the case.
+    bootstrap_from: str
+        the source to bootstrap from, which is the name of a docker
+        container is bootstrapping from docker as above.
+    apt_packages: List[str]
+        a list of strings representing the names of apt packages to be
+        installed in the current singularity image.
+
+    anaconda_version: str
+        the version number of the anaconda package to install, which
+        can be set to 2021.05 as a simple default.
+    python_version: str
+        the version number of the python interpreter to install, which
+        can be set to 3.7 as a simple default.
     env_name: str
         the name of the conda environment to build for this experiment
         which can simply be the name of the code-base.
-    env_packages: str
+    env_create_packages: str
         a string representing the names and channels of conda packages to
         be installed when creating the associated conda environment.
 
-    git_url: str
-        a string representing the url where the experiment code is
-        available for download using a git clone command.
-    git_target: str
-        a string representing the path on disk where the code will be
-        cloned into, and experiments will be ran from.
-    install_command: str
-        a string that instructs singularity how to install the experiment
-        code, which can be as simple as a pip or conda install.
-
-    sync: bool
-        a boolean that controls whether to sync the contents of the local
-        code working directory to the singularity image.
-    sync_with: str
+    sync_with: List[str]
         a string representing the path on disk where uncommitted code is
         stored and can be copied before starting experiments.
-    exclude_from_sync: str
+    sync_target: List[str]
+        a string representing the path on disk where the code will be
+        synced into, and experiments will be ran from.
+    exclude_from_sync: List[str]
         a string representing the file pattern of files to exclude when
         synchronizing code with the singularity image.
 
@@ -1090,18 +1121,6 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         if ssh_port is not None:
             config.ssh_port = ssh_port
 
-        if bootstrap is not None:
-            config.bootstrap = bootstrap
-        if bootstrap_from is not None:
-            config.bootstrap_from = bootstrap_from
-
-        if apt_packages is not None and len(apt_packages) > 0:
-            config.apt_packages = apt_packages
-        if anaconda_version is not None:
-            config.anaconda_version = anaconda_version
-        if python_version is not None:
-            config.python_version = python_version
-
         if local_recipe is not None:
             config.local_recipe = local_recipe
         if local_image is not None:
@@ -1111,27 +1130,49 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         if remote_image is not None:
             config.remote_image = remote_image
 
+        if len(before_apt_commands) > 0:
+            config.before_apt_commands = \
+                () if no_before_apt_commands else before_apt_commands
+        if len(post_apt_commands) > 0:
+            config.post_apt_commands = \
+                () if no_post_apt_commands else post_apt_commands
+        if len(before_env_commands) > 0:
+            config.before_env_commands = \
+                () if no_before_env_commands else before_env_commands
+        if len(post_env_commands) > 0:
+            config.post_env_commands = \
+                () if no_post_env_commands else post_env_commands
+
+        if bootstrap is not None:
+            config.bootstrap = bootstrap
+        if bootstrap_from is not None:
+            config.bootstrap_from = bootstrap_from
+        if len(apt_packages) > 0:
+            config.apt_packages = \
+                () if no_apt_packages else apt_packages
+
+        if anaconda_version is not None:
+            config.anaconda_version = anaconda_version
+        if python_version is not None:
+            config.python_version = python_version
         if env_name is not None:
             config.env_name = env_name
-        if env_packages is not None:
-            config.env_packages = env_packages
+        if env_create_arguments is not None:
+            config.env_create_arguments = env_create_arguments
 
-        if git_url is not None:
-            config.git_url = git_url
-        if git_target is not None:
-            config.git_target = git_target
-        if install_command is not None:
-            config.install_command = install_command
+        if len(sync_with) > 0:
+            config.sync_with = \
+                () if no_sync_with else sync_with
+        if len(sync_target) > 0:
+            config.sync_target = \
+                () if no_sync_target else sync_target
+        if len(exclude_from_sync) > 0:
+            config.exclude_from_sync = \
+                () if no_exclude_from_sync else exclude_from_sync
 
-        if sync is not None:
-            config.sync = sync
-        if sync_with is not None:
-            config.sync_with = sync_with
-        if exclude_from_sync is not None:
-            config.exclude_from_sync = exclude_from_sync
-
-        if init_commands is not None and len(init_commands) > 0:
-            config.init_commands = init_commands
+        if len(init_commands) > 0:
+            config.init_commands = \
+                () if no_init_commands else init_commands
 
 
 @command_line_interface.command()
@@ -1139,44 +1180,46 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
 @click.option('--ssh-password', is_flag=True)
 @click.option('--ssh-host', is_flag=True)
 @click.option('--ssh-port', is_flag=True)
+@click.option('--local-recipe', is_flag=True)
+@click.option('--local-image', is_flag=True)
+@click.option('--remote-recipe', is_flag=True)
+@click.option('--remote-image', is_flag=True)
+@click.option('--before-apt-commands', is_flag=True)
+@click.option('--post-apt-commands', is_flag=True)
+@click.option('--before-env-commands', is_flag=True)
+@click.option('--post-env-commands', is_flag=True)
 @click.option('--bootstrap', is_flag=True)
 @click.option('--bootstrap-from', is_flag=True)
 @click.option('--apt-packages', is_flag=True)
 @click.option('--anaconda-version', is_flag=True)
 @click.option('--python-version', is_flag=True)
-@click.option('--local-recipe', is_flag=True)
-@click.option('--local-image', is_flag=True)
-@click.option('--remote-recipe', is_flag=True)
-@click.option('--remote-image', is_flag=True)
 @click.option('--env-name', is_flag=True)
-@click.option('--env-packages', is_flag=True)
-@click.option('--git-url', is_flag=True)
-@click.option('--git-target', is_flag=True)
-@click.option('--install-command', is_flag=True)
-@click.option('--sync', is_flag=True)
+@click.option('--env-create-arguments', is_flag=True)
 @click.option('--sync-with', is_flag=True)
+@click.option('--sync-target', is_flag=True)
 @click.option('--exclude-from-sync', is_flag=True)
 @click.option('--init-commands', is_flag=True)
 def get(ssh_username: bool = False,
         ssh_password: bool = False,
         ssh_host: bool = False,
         ssh_port: bool = False,
+        local_recipe: bool = False,
+        local_image: bool = False,
+        remote_recipe: bool = False,
+        remote_image: bool = False,
+        before_apt_commands: bool = False,
+        post_apt_commands: bool = False,
+        before_env_commands: bool = False,
+        post_env_commands: bool = False,
         bootstrap: bool = False,
         bootstrap_from: bool = False,
         apt_packages: bool = False,
         anaconda_version: bool = False,
         python_version: bool = False,
-        local_recipe: bool = False,
-        local_image: bool = False,
-        remote_recipe: bool = False,
-        remote_image: bool = False,
         env_name: bool = False,
-        env_packages: bool = False,
-        git_url: bool = False,
-        git_target: bool = False,
-        install_command: bool = False,
-        sync: bool = False,
+        env_create_arguments: bool = False,
         sync_with: bool = False,
+        sync_target: bool = False,
         exclude_from_sync: bool = False,
         init_commands: bool = False):
     """Read new parameters to the persistent experiment config by loading
@@ -1198,23 +1241,6 @@ def get(ssh_username: bool = False,
         an integer representing the port on the remote machine to use
         when connecting to the machine to launch jobs.
 
-    bootstrap: str
-        whether to bootstrap this singularity image from docker, and
-        is set to 'docker' if this is the case.
-    bootstrap_from: str
-        the source to bootstrap from, which is the name of a docker
-        container is bootstrapping from docker as above.
-
-    apt_packages: List[str]
-        a list of strings representing the names of apt packages to be
-        installed in the current singularity image.
-    anaconda_version: str
-        the version number of the anaconda package to install, which
-        can be set to 2021.05 as a simple default.
-    python_version: str
-        the version number of the python interpreter to install, which
-        can be set to 3.7 as a simple default.
-
     local_recipe: str
         the location on the disk to write a singularity recipe file
         which will be used later to build a singularity image.
@@ -1228,30 +1254,49 @@ def get(ssh_username: bool = False,
         the location on the host to write a singularity image, which will
         be launched when running experiments.
 
+    before_apt_commands: List[str]
+        a list of commands to run while building the singularity image
+        before apt packages are installed.
+    post_apt_commands: List[str]
+        a list of commands to run while building the singularity image
+        after all apt packages have been installed.
+    before_env_commands: List[str]
+        a list of commands to run while building the singularity image
+        before conda is downloaded and the env is created.
+    post_env_commands: List[str]
+        a list of commands to run while building the singularity image
+        after conda is downloaded and the env has been created.
+
+    bootstrap: str
+        whether to bootstrap this singularity image from docker, and
+        is set to 'docker' if this is the case.
+    bootstrap_from: str
+        the source to bootstrap from, which is the name of a docker
+        container is bootstrapping from docker as above.
+    apt_packages: List[str]
+        a list of strings representing the names of apt packages to be
+        installed in the current singularity image.
+
+    anaconda_version: str
+        the version number of the anaconda package to install, which
+        can be set to 2021.05 as a simple default.
+    python_version: str
+        the version number of the python interpreter to install, which
+        can be set to 3.7 as a simple default.
     env_name: str
         the name of the conda environment to build for this experiment
         which can simply be the name of the code-base.
-    env_packages: str
+    env_create_packages: str
         a string representing the names and channels of conda packages to
         be installed when creating the associated conda environment.
 
-    git_url: str
-        a string representing the url where the experiment code is
-        available for download using a git clone command.
-    git_target: str
-        a string representing the path on disk where the code will be
-        cloned into, and experiments will be ran from.
-    install_command: str
-        a string that instructs singularity how to install the experiment
-        code, which can be as simple as a pip or conda install.
-
-    sync: bool
-        a boolean that controls whether to sync the contents of the local
-        code working directory to the singularity image.
-    sync_with: str
+    sync_with: List[str]
         a string representing the path on disk where uncommitted code is
         stored and can be copied before starting experiments.
-    exclude_from_sync: str
+    sync_target: List[str]
+        a string representing the path on disk where the code will be
+        synced into, and experiments will be ran from.
+    exclude_from_sync: List[str]
         a string representing the file pattern of files to exclude when
         synchronizing code with the singularity image.
 
@@ -1272,18 +1317,6 @@ def get(ssh_username: bool = False,
         if ssh_port:
             print("ssh_port:", config.ssh_port)
 
-        if bootstrap:
-            print("bootstrap:", config.bootstrap)
-        if bootstrap_from:
-            print("bootstrap_from:", config.bootstrap_from)
-
-        if apt_packages:
-            print("apt_packages:", config.apt_packages)
-        if anaconda_version:
-            print("anaconda_version:", config.anaconda_version)
-        if python_version:
-            print("python_version:", config.python_version)
-
         if local_recipe:
             print("local_recipe:", config.local_recipe)
         if local_image:
@@ -1293,22 +1326,35 @@ def get(ssh_username: bool = False,
         if remote_image:
             print("remote_image:", config.remote_image)
 
+        if before_apt_commands:
+            print("before_apt_commands:", config.before_apt_commands)
+        if post_apt_commands:
+            print("post_apt_commands:", config.post_apt_commands)
+        if before_env_commands:
+            print("before_env_commands:", config.before_env_commands)
+        if post_env_commands:
+            print("post_env_commands:", config.post_env_commands)
+
+        if bootstrap:
+            print("bootstrap:", config.bootstrap)
+        if bootstrap_from:
+            print("bootstrap_from:", config.bootstrap_from)
+        if apt_packages:
+            print("apt_packages:", config.apt_packages)
+
+        if anaconda_version:
+            print("anaconda_version:", config.anaconda_version)
+        if python_version:
+            print("python_version:", config.python_version)
         if env_name:
             print("env_name:", config.env_name)
-        if env_packages:
-            print("env_packages:", config.env_packages)
+        if env_create_arguments:
+            print("env_create_arguments:", config.env_create_arguments)
 
-        if git_url:
-            print("git_url:", config.git_url)
-        if git_target:
-            print("git_target:", config.git_target)
-        if install_command:
-            print("install_command:", config.install_command)
-
-        if sync:
-            print("sync:", config.sync)
         if sync_with:
             print("sync_with:", config.sync_with)
+        if sync_target:
+            print("sync_target:", config.sync_target)
         if exclude_from_sync:
             print("exclude_from_sync:", config.exclude_from_sync)
 
@@ -1319,10 +1365,8 @@ def get(ssh_username: bool = False,
 @command_line_interface.command(
     context_settings=dict(ignore_unknown_options=True))
 @click.option('--rebuild', is_flag=True)
-@click.option('--sync/--no-sync', is_flag=True, default=None)
 @click.argument('commands', type=str, nargs=-1)
-def local(rebuild: bool = False,
-          sync: bool = None, commands: List[str] = ()):
+def local(rebuild: bool = False, commands: List[str] = ()):
     """Load the persistent experiment configuration file and launch an
     experiment locally by loading the singularity image and syncing local
     code with the code in the image and running commands.
@@ -1332,9 +1376,6 @@ def local(rebuild: bool = False,
     rebuild: bool
         a boolean that controls whether the singularity image should be
         rebuilt even if it already exists on the disk.
-    sync: bool
-        a boolean that controls whether to sync the contents of the local
-        code working directory to the singularity image.
     commands: List[str]
         a list of strings representing commands that are run within the
         container once all setup commands are finished.
@@ -1342,7 +1383,8 @@ def local(rebuild: bool = False,
     """
 
     with PersistentExperimentConfig() as config:
-        config.local_run(" ".join(commands), sync=sync, rebuild=rebuild)
+        commands = (" ".join(commands)) if len(commands) > 0 else ()
+        config.local_run(*commands, rebuild=rebuild)
 
 
 @command_line_interface.command(
@@ -1353,12 +1395,10 @@ def local(rebuild: bool = False,
 @click.option('--num-hours', type=int, default=8)
 @click.option('--partition', type=str, default="russ_reserved")
 @click.option('--rebuild', is_flag=True)
-@click.option('--sync/--no-sync', is_flag=True, default=None)
 @click.argument('commands', type=str, nargs=-1)
-def remote(num_cpus: int = 4, num_gpus: int = 1,
-           memory: int = 16, num_hours: int = 8,
-           partition: str = "russ_reserved", rebuild: bool = False,
-           sync: bool = None, commands: List[str] = ()):
+def remote(num_cpus: int = 4, num_gpus: int = 1, memory: int = 16,
+           num_hours: int = 8, partition: str = "russ_reserved",
+           rebuild: bool = False, commands: List[str] = ()):
     """Load the persistent experiment configuration file and launch an
     experiment remotely by loading the singularity image and syncing local
     code with the code in the remote image and running commands.
@@ -1384,9 +1424,6 @@ def remote(num_cpus: int = 4, num_gpus: int = 1,
     rebuild: bool
         a boolean that controls whether the singularity image should be
         rebuilt even if it already exists on the disk.
-    sync: bool
-        a boolean that controls whether to sync the contents of the local
-        code working directory to the singularity image.
     commands: List[str]
         a list of strings representing commands that are run within the
         container once all setup commands are finished.
@@ -1394,8 +1431,8 @@ def remote(num_cpus: int = 4, num_gpus: int = 1,
     """
 
     with PersistentExperimentConfig() as config:
-        config.remote_run(" ".join(commands), sync=sync, rebuild=rebuild,
-                          partition=partition,
+        commands = (" ".join(commands)) if len(commands) > 0 else ()
+        config.remote_run(*commands, rebuild=rebuild, partition=partition,
                           num_cpus=num_cpus, num_gpus=num_gpus,
                           memory=memory, num_hours=num_hours)
 
@@ -1518,22 +1555,23 @@ def dump(file: str = None):
     # export a dictionary containing the non private configuration info
     with PersistentExperimentConfig() as config:
         with open(file, "w") as f:
-            json.dump(dict(bootstrap=config.bootstrap,
+            json.dump(dict(local_recipe=config.local_recipe,
+                           local_image=config.local_image,
+                           remote_recipe=config.remote_recipe,
+                           remote_image=config.remote_image,
+                           before_apt_commands=config.before_apt_commands,
+                           post_apt_commands=config.post_apt_commands,
+                           before_env_commands=config.before_env_commands,
+                           post_env_commands=config.post_env_commands,
+                           bootstrap=config.bootstrap,
                            bootstrap_from=config.bootstrap_from,
                            apt_packages=config.apt_packages,
                            anaconda_version=config.anaconda_version,
                            python_version=config.python_version,
-                           local_recipe=config.local_recipe,
-                           local_image=config.local_image,
-                           remote_recipe=config.remote_recipe,
-                           remote_image=config.remote_image,
                            env_name=config.env_name,
-                           env_packages=config.env_packages,
-                           git_url=config.git_url,
-                           git_target=config.git_target,
-                           install_command=config.install_command,
-                           sync=config.sync,
+                           env_create_arguments=config.env_create_arguments,
                            sync_with=config.sync_with,
+                           sync_target=config.sync_target,
                            exclude_from_sync=config.exclude_from_sync,
                            init_commands=config.init_commands), f, indent=4)
 
@@ -1559,22 +1597,23 @@ def load(file: str = None):
 
     # load a dictionary containing the non private configuration info
     with PersistentExperimentConfig() as config:
+        config.local_recipe = data["local_recipe"]
+        config.local_image = data["local_image"]
+        config.remote_recipe = data["remote_recipe"]
+        config.remote_image = data["remote_image"]
+        config.before_apt_commands = data["before_apt_commands"]
+        config.post_apt_commands = data["post_apt_commands"]
+        config.before_env_commands = data["before_env_commands"]
+        config.post_env_commands = data["post_env_commands"]
         config.bootstrap = data["bootstrap"]
         config.bootstrap_from = data["bootstrap_from"]
         config.apt_packages = data["apt_packages"]
         config.anaconda_version = data["anaconda_version"]
         config.python_version = data["python_version"]
-        config.local_recipe = data["local_recipe"]
-        config.local_image = data["local_image"]
-        config.remote_recipe = data["remote_recipe"]
-        config.remote_image = data["remote_image"]
         config.env_name = data["env_name"]
-        config.env_packages = data["env_packages"]
-        config.git_url = data["git_url"]
-        config.git_target = data["git_target"]
-        config.install_command = data["install_command"]
-        config.sync = data["sync"]
+        config.env_create_arguments = data["env_create_arguments"]
         config.sync_with = data["sync_with"]
+        config.sync_target = data["sync_target"]
         config.exclude_from_sync = data["exclude_from_sync"]
         config.init_commands = data["init_commands"]
 

@@ -24,15 +24,15 @@ CLASSIFIERS = [
 URL = 'https://github.com/brandontrabucco/spork'
 
 
-setup(name='spork-cli', version='1.0.8', license='MIT',
+setup(name='spork-cli', version='1.0.9', license='MIT',
       packages=find_packages(include=['spork', 'spork.*']),
       description=('CLI For Launching '
                    'Experiments Using Singularity On Slurm'),
       long_description=LONG_DESCRIPTION, classifiers=CLASSIFIERS,
       long_description_content_type='text/markdown',
       author='Brandon Trabucco', author_email='brandon@btrabucco.com',
-      url=URL, download_url=URL + '/archive/v1_0_8.tar.gz',
+      url=URL, download_url=URL + '/archive/v1_0_9.tar.gz',
       keywords=['Deep Learning', 'Research', 'Management'],
-      install_requires=['click', 'paramiko', 'pexpect'],
+      install_requires=['click', 'paramiko', 'pexpect', 'spython'],
       entry_points={'console_scripts': (
           'spork=spork.experiment_config:command_line_interface',)})
