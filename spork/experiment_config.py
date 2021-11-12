@@ -691,7 +691,7 @@ class ExperimentConfig(object):
             stdout = os.popen("rm -rf {} && rm {}"
                               .format(self.local_image, self.local_recipe))
             for line in iter(stdout.readline, ""):
-                print(line)  # prints even if the command is not finished
+                print(line, end="")  # prints even if not finished
 
         # if the recipe does not exist locally then write it first
         if rebuild or not self.local_image_exists():
@@ -710,7 +710,7 @@ class ExperimentConfig(object):
 
         # print the output from the terminal as the command runs
         for line in iter(stdout.readline, ""):
-            print(line)  # prints even if the command is not yet finished
+            print(line, end="")  # prints even if not yet finished
 
     def run_in_slurm(self, *commands: str, partition: str = "russ_reserved",
                      num_cpus: int = 4, num_gpus: int = 1,
@@ -828,7 +828,7 @@ class ExperimentConfig(object):
 
         # print the output from the terminal as the command runs
         for line in iter(stdout.readline, ""):
-            print(line)  # prints even if the command is not yet finished
+            print(line, end="")  # prints even if not yet finished
 
     def remote_shell(self, *commands: str, client: paramiko.SSHClient = None,
                      watch: bool = False, interval: float = 1.0):
@@ -876,7 +876,7 @@ class ExperimentConfig(object):
         for i, line in enumerate(iter(stdout.readline, "")):
             if i == 0 and watch:
                 clear_and_print_header()
-            print(line)  # prints even if the command is not yet finished
+            print(line, end="")  # prints even if not yet finished
 
         while watch:  # repeat the commands at an interval
             # run the provided commands again in the shell on the host
@@ -887,7 +887,7 @@ class ExperimentConfig(object):
             for i, line in enumerate(iter(stdout.readline, "")):
                 if i == 0:
                     clear_and_print_header()
-                print(line)  # prints even if the command is not finished
+                print(line, end="")  # prints even if not finished
 
 
 # the default location for a config file to be stored on the local disk
