@@ -1383,7 +1383,7 @@ def local(rebuild: bool = False, commands: List[str] = ()):
     """
 
     with PersistentExperimentConfig() as config:
-        commands = (" ".join(commands)) if len(commands) > 0 else ()
+        commands = [" ".join(commands)] if len(commands) > 0 else []
         config.local_run(*commands, rebuild=rebuild)
 
 
@@ -1431,7 +1431,7 @@ def remote(num_cpus: int = 4, num_gpus: int = 1, memory: int = 16,
     """
 
     with PersistentExperimentConfig() as config:
-        commands = (" ".join(commands)) if len(commands) > 0 else ()
+        commands = [" ".join(commands)] if len(commands) > 0 else []
         config.remote_run(*commands, rebuild=rebuild, partition=partition,
                           num_cpus=num_cpus, num_gpus=num_gpus,
                           memory=memory, num_hours=num_hours)
@@ -1559,20 +1559,25 @@ def dump(file: str = None):
                            local_image=config.local_image,
                            remote_recipe=config.remote_recipe,
                            remote_image=config.remote_image,
+                           
                            before_apt_commands=config.before_apt_commands,
                            post_apt_commands=config.post_apt_commands,
                            before_env_commands=config.before_env_commands,
                            post_env_commands=config.post_env_commands,
+                           
                            bootstrap=config.bootstrap,
                            bootstrap_from=config.bootstrap_from,
                            apt_packages=config.apt_packages,
+                           
                            anaconda_version=config.anaconda_version,
                            python_version=config.python_version,
                            env_name=config.env_name,
                            env_create_arguments=config.env_create_arguments,
+                           
                            sync_with=config.sync_with,
                            sync_target=config.sync_target,
                            exclude_from_sync=config.exclude_from_sync,
+                           
                            init_commands=config.init_commands), f, indent=4)
 
 
@@ -1591,30 +1596,35 @@ def load(file: str = None):
 
     """
 
-    # load the specified configuration file from the local disk
     with open(file, "r") as f:
         data = json.load(f)  # the format of this object is a dictionary
 
-    # load a dictionary containing the non private configuration info
+    # load a dictionary containing non private configuration info
     with PersistentExperimentConfig() as config:
+        
         config.local_recipe = data["local_recipe"]
         config.local_image = data["local_image"]
         config.remote_recipe = data["remote_recipe"]
         config.remote_image = data["remote_image"]
+        
         config.before_apt_commands = data["before_apt_commands"]
         config.post_apt_commands = data["post_apt_commands"]
         config.before_env_commands = data["before_env_commands"]
         config.post_env_commands = data["post_env_commands"]
+        
         config.bootstrap = data["bootstrap"]
         config.bootstrap_from = data["bootstrap_from"]
         config.apt_packages = data["apt_packages"]
+        
         config.anaconda_version = data["anaconda_version"]
         config.python_version = data["python_version"]
         config.env_name = data["env_name"]
         config.env_create_arguments = data["env_create_arguments"]
+        
         config.sync_with = data["sync_with"]
         config.sync_target = data["sync_target"]
         config.exclude_from_sync = data["exclude_from_sync"]
+        
         config.init_commands = data["init_commands"]
 
 
