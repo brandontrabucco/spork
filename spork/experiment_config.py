@@ -12,7 +12,7 @@ from pexpect import spawn, EOF
 from typing import List
 
 
-DEFAULT_RECIPE = r"""Bootstrap: {bootstrap}
+RECIPE_TEMPLATE = r"""Bootstrap: {bootstrap}
 From: {bootstrap_from}
 
 %post
@@ -76,9 +76,8 @@ DEFAULT_ENV_CREATE_ARGUMENTS = \
 
 
 # a default location for the singularity image and singularity recipe
-DEFAULT_LOCAL_RECIPE = "experiment.recipe"
+DEFAULT_RECIPE = "experiment.recipe"
 DEFAULT_LOCAL_IMAGE = "experiment.sif"
-DEFAULT_REMOTE_RECIPE = "experiment.recipe"
 DEFAULT_REMOTE_IMAGE = "experiment.sif"
 
 
@@ -145,15 +144,12 @@ class ExperimentConfig(object):
         an integer representing the port on the remote machine to use
         when connecting to the machine to launch jobs.
 
-    local_recipe: str
+    recipe: str
         the location on the disk to write a singularity recipe file
         which will be used later to build a singularity image.
     local_image: str
         the location on the disk to write a singularity image, which will
         be launched when running experiments.
-    remote_recipe: str
-        the location on the host to write a singularity recipe file
-        which will be used later to build a singularity image.
     remote_image: str
         the location on the host to write a singularity image, which will
         be launched when running experiments.
@@ -214,9 +210,8 @@ class ExperimentConfig(object):
                  ssh_password: str = DEFAULT_SSH_PASSWORD,
                  ssh_host: str = DEFAULT_SSH_HOST,
                  ssh_port: int = DEFAULT_SSH_PORT,
-                 local_recipe: str = DEFAULT_LOCAL_RECIPE,
+                 recipe: str = DEFAULT_RECIPE,
                  local_image: str = DEFAULT_LOCAL_IMAGE,
-                 remote_recipe: str = DEFAULT_REMOTE_RECIPE,
                  remote_image: str = DEFAULT_REMOTE_IMAGE,
                  before_apt_commands: List[str] = DEFAULT_BEFORE_APT_COMMANDS,
                  post_apt_commands: List[str] = DEFAULT_POST_APT_COMMANDS,
@@ -252,15 +247,12 @@ class ExperimentConfig(object):
             an integer representing the port on the remote machine to use
             when connecting to the machine to launch jobs.
 
-        local_recipe: str
+        recipe: str
             the location on the disk to write a singularity recipe file
             which will be used later to build a singularity image.
         local_image: str
             the location on the disk to write a singularity image, which will
             be launched when running experiments.
-        remote_recipe: str
-            the location on the host to write a singularity recipe file
-            which will be used later to build a singularity image.
         remote_image: str
             the location on the host to write a singularity image, which will
             be launched when running experiments.
@@ -324,9 +316,8 @@ class ExperimentConfig(object):
         self.ssh_port = ssh_port
 
         # locations for a singularity recipe and image to be written
-        self.local_recipe = local_recipe
+        self.recipe = recipe
         self.local_image = local_image
-        self.remote_recipe = remote_recipe
         self.remote_image = remote_image
 
         # additional commands to run when building the singularity image
@@ -354,7 +345,7 @@ class ExperimentConfig(object):
         # arguments that specify how to sync code before an experiment
         self.init_commands = init_commands
 
-    def local_recipe_exists(self) -> bool:
+    def recipe_exists(self) -> bool:
         """Utility function that checks the local disk for whether a
         singularity recipe with the given name already exists on the disk
         at the desired location, and if so returns true.
@@ -367,7 +358,7 @@ class ExperimentConfig(object):
 
         """
 
-        return os.path.exists(self.local_recipe)  # exists at this location
+        return os.path.exists(self.recipe)  # exists at this location
 
     def local_image_exists(self) -> bool:
         """Utility function that checks the local disk for whether a
@@ -418,34 +409,6 @@ class ExperimentConfig(object):
         else:
             return True  # stat finished and the file is present
 
-    def remote_recipe_exists(self, client: paramiko.SSHClient = None) -> bool:
-        """Utility function that checks the remote host for whether a
-        singularity recipe with the given name already exists on the host
-        at the desired location, and if so returns true.
-
-        Returns:
-
-        recipe_exists: bool
-            a boolean that returns True if the singularity image with the
-            specified name already exists on the host.
-
-        """
-
-        if client is None:
-
-            # open an ssh connection to the remote host by logging in using
-            # the provided username and password for that machine
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(self.ssh_host, self.ssh_port,
-                           username=self.ssh_username,
-                           password=self.ssh_password,
-                           look_for_keys=False, allow_agent=False)
-
-        # open an sftp client and check if a file exists on the remote host
-        with client.open_sftp() as sftp:
-            return self.remote_path_exists(sftp, self.remote_recipe)
-
     def remote_image_exists(self, client: paramiko.SSHClient = None) -> bool:
         """Utility function that checks the remote host for whether a
         singularity image with the given name already exists on the host
@@ -486,8 +449,8 @@ class ExperimentConfig(object):
                         .format(apt_packages=" ".join(self.apt_packages)))
 
         # write a singularity recipe file to the disk at the desired path
-        with open(self.local_recipe, "w") as recipe_file:
-            recipe_file.write(DEFAULT_RECIPE.format(
+        with open(self.recipe, "w") as recipe_file:
+            recipe_file.write(RECIPE_TEMPLATE.format(
                 bootstrap=self.bootstrap,
                 bootstrap_from=self.bootstrap_from,
                 before_apt_commands="\n".join(self.before_apt_commands),
@@ -508,12 +471,12 @@ class ExperimentConfig(object):
         """
 
         # if the recipe does not exist locally then write it first
-        if not self.local_recipe_exists():
+        if not self.recipe_exists():
             self.write_singularity_recipe()
 
         # build the singularity image using the singularity api
         from spython.main import Client
-        Client.build(recipe=self.local_recipe, image=self.local_image,
+        Client.build(recipe=self.recipe, image=self.local_image,
                      sudo=False, sandbox=True,
                      options=["--fakeroot", "--force"], **kwargs)
 
@@ -686,9 +649,9 @@ class ExperimentConfig(object):
 
         """
 
-        if rebuild:  # if the image is being rebuilt delete the existing image
-            stdout = os.popen("rm -rf {} && rm {}"
-                              .format(self.local_image, self.local_recipe))
+        if rebuild:  # if being rebuilt delete the existing one
+            stdout = os.popen("rm {}; rm -rf {}"
+                              .format(self.recipe, self.local_image))
             for line in iter(stdout.readline, ""):
                 print(line, end="")  # prints even if not finished
 
@@ -800,8 +763,8 @@ class ExperimentConfig(object):
                        look_for_keys=False, allow_agent=False)
 
         if rebuild:  # if the image is being rebuilt delete the existing image
-            self.remote_shell("rm -rf {} && rm {}".format(
-                self.remote_image, self.remote_recipe), client=client)
+            self.remote_shell("rm -rf {}"
+                              .format(self.remote_image), client=client)
 
         # if the image does not exist on the remote then upload it first
         if rebuild or not self.remote_image_exists(client=client):
@@ -965,9 +928,8 @@ def command_line_interface():
 @click.option('--ssh-password', type=str, default=None)
 @click.option('--ssh-host', type=str, default=None)
 @click.option('--ssh-port', type=int, default=None)
-@click.option('--local-recipe', type=str, default=None)
+@click.option('--recipe', type=str, default=None)
 @click.option('--local-image', type=str, default=None)
-@click.option('--remote-recipe', type=str, default=None)
 @click.option('--remote-image', type=str, default=None)
 @click.option('--before-apt-commands', type=str, default=None, multiple=True)
 @click.option('--no-before-apt-commands', is_flag=True)
@@ -997,9 +959,8 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         ssh_password: str = DEFAULT_SSH_PASSWORD,
         ssh_host: str = DEFAULT_SSH_HOST,
         ssh_port: int = DEFAULT_SSH_PORT,
-        local_recipe: str = DEFAULT_LOCAL_RECIPE,
+        recipe: str = DEFAULT_RECIPE,
         local_image: str = DEFAULT_LOCAL_IMAGE,
-        remote_recipe: str = DEFAULT_REMOTE_RECIPE,
         remote_image: str = DEFAULT_REMOTE_IMAGE,
         before_apt_commands: List[str] = DEFAULT_BEFORE_APT_COMMANDS,
         no_before_apt_commands: bool = False,
@@ -1044,15 +1005,12 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         an integer representing the port on the remote machine to use
         when connecting to the machine to launch jobs.
 
-    local_recipe: str
+    recipe: str
         the location on the disk to write a singularity recipe file
         which will be used later to build a singularity image.
     local_image: str
         the location on the disk to write a singularity image, which will
         be launched when running experiments.
-    remote_recipe: str
-        the location on the host to write a singularity recipe file
-        which will be used later to build a singularity image.
     remote_image: str
         the location on the host to write a singularity image, which will
         be launched when running experiments.
@@ -1120,12 +1078,10 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         if ssh_port is not None:
             config.ssh_port = ssh_port
 
-        if local_recipe is not None:
-            config.local_recipe = local_recipe
+        if recipe is not None:
+            config.recipe = recipe
         if local_image is not None:
             config.local_image = local_image
-        if remote_recipe is not None:
-            config.remote_recipe = remote_recipe
         if remote_image is not None:
             config.remote_image = remote_image
 
@@ -1179,9 +1135,8 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
 @click.option('--ssh-password', is_flag=True)
 @click.option('--ssh-host', is_flag=True)
 @click.option('--ssh-port', is_flag=True)
-@click.option('--local-recipe', is_flag=True)
+@click.option('--recipe', is_flag=True)
 @click.option('--local-image', is_flag=True)
-@click.option('--remote-recipe', is_flag=True)
 @click.option('--remote-image', is_flag=True)
 @click.option('--before-apt-commands', is_flag=True)
 @click.option('--post-apt-commands', is_flag=True)
@@ -1202,9 +1157,8 @@ def get(ssh_username: bool = False,
         ssh_password: bool = False,
         ssh_host: bool = False,
         ssh_port: bool = False,
-        local_recipe: bool = False,
+        recipe: bool = False,
         local_image: bool = False,
-        remote_recipe: bool = False,
         remote_image: bool = False,
         before_apt_commands: bool = False,
         post_apt_commands: bool = False,
@@ -1240,15 +1194,12 @@ def get(ssh_username: bool = False,
         an integer representing the port on the remote machine to use
         when connecting to the machine to launch jobs.
 
-    local_recipe: str
+    recipe: str
         the location on the disk to write a singularity recipe file
         which will be used later to build a singularity image.
     local_image: str
         the location on the disk to write a singularity image, which will
         be launched when running experiments.
-    remote_recipe: str
-        the location on the host to write a singularity recipe file
-        which will be used later to build a singularity image.
     remote_image: str
         the location on the host to write a singularity image, which will
         be launched when running experiments.
@@ -1316,12 +1267,10 @@ def get(ssh_username: bool = False,
         if ssh_port:
             print("ssh_port:", config.ssh_port)
 
-        if local_recipe:
-            print("local_recipe:", config.local_recipe)
+        if recipe:
+            print("recipe:", config.recipe)
         if local_image:
             print("local_image:", config.local_image)
-        if remote_recipe:
-            print("remote_recipe:", config.remote_recipe)
         if remote_image:
             print("remote_image:", config.remote_image)
 
@@ -1554,9 +1503,8 @@ def dump(file: str = None):
     # export a dictionary containing the non private configuration info
     with PersistentExperimentConfig() as config:
         with open(file, "w") as f:
-            json.dump(dict(local_recipe=config.local_recipe,
+            json.dump(dict(recipe=config.recipe,
                            local_image=config.local_image,
-                           remote_recipe=config.remote_recipe,
                            remote_image=config.remote_image,
                            
                            before_apt_commands=config.before_apt_commands,
@@ -1601,9 +1549,8 @@ def load(file: str = None):
     # load a dictionary containing non private configuration info
     with PersistentExperimentConfig() as config:
         
-        config.local_recipe = data["local_recipe"]
+        config.recipe = data["recipe"]
         config.local_image = data["local_image"]
-        config.remote_recipe = data["remote_recipe"]
         config.remote_image = data["remote_image"]
         
         config.before_apt_commands = data["before_apt_commands"]
