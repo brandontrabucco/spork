@@ -515,7 +515,7 @@ class ExperimentConfig(object):
         from spython.main import Client
         Client.build(recipe=self.local_recipe, image=self.local_image,
                      sudo=False, sandbox=True,
-                     options=["--fakeroot"], **kwargs)
+                     options=["--fakeroot", "--force"], **kwargs)
 
     @staticmethod
     def local_rsync(source_path: str, destination_path: str,
@@ -686,8 +686,7 @@ class ExperimentConfig(object):
 
         """
 
-        # if the image is being rebuilt then delete the existing image
-        if rebuild and self.local_image_exists():
+        if rebuild:  # if the image is being rebuilt delete the existing image
             stdout = os.popen("rm -rf {} && rm {}"
                               .format(self.local_image, self.local_recipe))
             for line in iter(stdout.readline, ""):
@@ -800,8 +799,7 @@ class ExperimentConfig(object):
                        username=self.ssh_username, password=self.ssh_password,
                        look_for_keys=False, allow_agent=False)
 
-        # if the image is being rebuilt then delete the existing image
-        if rebuild and self.local_image_exists():
+        if rebuild:  # if the image is being rebuilt delete the existing image
             self.remote_shell("rm -rf {} && rm {}".format(
                 self.remote_image, self.remote_recipe), client=client)
 
@@ -902,7 +900,8 @@ class PersistentExperimentConfig(object):
 
     """
 
-    def __init__(self, storage_path: str = DEFAULT_CONFIG, **kwargs):
+    def __init__(self, clear: bool = False,
+                 storage_path: str = DEFAULT_CONFIG, **kwargs):
         """Create a persistent wrapper around the ExperimentConfig class that
         enables saving and loading the config multiple times when the
         parameters are changed and experiments are launched.
@@ -921,7 +920,7 @@ class PersistentExperimentConfig(object):
 
         # if an experiment configuration has not previously been created
         # then create a new one and save it at the target location
-        if not os.path.exists(self.storage_path):
+        if clear or not os.path.exists(self.storage_path):
             with open(self.storage_path, "wb") as f:
                 pkl.dump(ExperimentConfig(**kwargs), f)  # save a default
 
@@ -1626,6 +1625,19 @@ def load(file: str = None):
         config.exclude_from_sync = data["exclude_from_sync"]
         
         config.init_commands = data["init_commands"]
+
+
+@command_line_interface.command()
+def clear():
+    """Clear the current experiment configuration and write a default one
+    to the disk in place of the existing persistent configuration file,
+    which can be teh fastest way to remove undesired states.
+
+    """
+
+    # load a dictionary containing non private configuration info
+    with PersistentExperimentConfig(clear=True):
+        pass  # do nothing and write the default config
 
 
 if __name__ == "__main__":
