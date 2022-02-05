@@ -7,10 +7,8 @@ import pickle as pkl
 import click
 import json
 
-
 from pexpect import spawn, EOF
 from typing import List, Sequence
-
 
 RECIPE_TEMPLATE = r"""Bootstrap: {bootstrap}
 From: {bootstrap_from}
@@ -59,13 +57,11 @@ chmod -R 777 /code
 chmod -R 777 /results
 chmod -R 777 /anaconda3"""
 
-
 # arguments for setting up the package environment in singularity
 DEFAULT_BOOTSTRAP = "docker"
 DEFAULT_BOOTSTRAP_FROM = "nvidia/cuda:11.3.1-cudnn8-devel-ubuntu16.04"
 DEFAULT_APT_PACKAGES = ("unzip", "htop", "wget",
                         "git", "vim", "cmake", "gcc", "g++")
-
 
 # arguments that describe the conda environment to build
 DEFAULT_ANACONDA_VERSION = "2021.05"
@@ -74,44 +70,36 @@ DEFAULT_ENV_NAME = "venv"
 DEFAULT_ENV_CREATE_ARGUMENTS = \
     "pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch"
 
-
 # a default location for the singularity image and singularity recipe
 DEFAULT_RECIPE = "experiment.recipe"
 DEFAULT_LOCAL_IMAGE = "experiment.sif"
 DEFAULT_REMOTE_IMAGE = "experiment.sif"
 
-
 # commands that are run before and after apt packages are installed
 DEFAULT_BEFORE_APT_COMMANDS = ()
 DEFAULT_POST_APT_COMMANDS = ()
 
-
 # commands that are run before and after the conda environment is created
 DEFAULT_BEFORE_ENV_COMMANDS = ()
 DEFAULT_POST_ENV_COMMANDS = ()
-
 
 # information about how to sync code before running an experiment
 DEFAULT_SYNC_WITH = ()
 DEFAULT_SYNC_TARGET = ()
 DEFAULT_EXCLUDE_FROM_SYNC = ()
 
-
 # commands that are run at various stages of initialization
 DEFAULT_SINGULARITY_INIT_COMMANDS = ()
 DEFAULT_SLURM_INIT_COMMANDS = ()
-
 
 # a template for running experiment commands in the container
 SINGULARITY_EXEC_TEMPLATE = \
     "singularity exec --nv -w {image} bash -c \"{singularity_command}\""
 
-
 # a template for launching an experiment using a slurm scheduler
 SLURM_SRUN_TEMPLATE = "sbatch --cpus-per-task={num_cpus} \
-    --gres=gpu:{num_gpus} --mem={memory}g \
-    --time={num_hours}:00:00 -p {partition} --wrap=\'{slurm_command}\'"
-
+--gres=gpu:{num_gpus} --mem={memory}g \
+--time={num_hours}:00:00 -p {partition} --wrap=\'{slurm_command}\'"
 
 # credentials for logging in to the remote host using ssh
 DEFAULT_SSH_USERNAME = "username"
@@ -120,15 +108,14 @@ DEFAULT_SSH_HOST = "matrix.ml.cmu.edu"
 DEFAULT_SSH_PORT = 22
 DEFAULT_SSH_SLEEP_SECONDS = 0.005
 
-
 # the amount of seconds to wait by default for a command ran by pexpect
 DEFAULT_PROCESS_TIMEOUT = 10800
 
 
 def add_separator(elements: Sequence[str]):
     for i, element in enumerate(elements):
-        yield element + (" " if i == len(elements) - 1 or
-                         element.strip().endswith("&") else " && ")
+        yield element + ("" if i == len(elements) - 1 else (
+            " " if element.strip().endswith("&") else " && "))
 
 
 class ExperimentConfig(object):
@@ -439,7 +426,6 @@ class ExperimentConfig(object):
         """
 
         if client is None:
-
             # open an ssh connection to the remote host by logging in using
             # the provided username and password for that machine
             client = paramiko.SSHClient()
@@ -685,7 +671,7 @@ class ExperimentConfig(object):
                 self.sync_with, self.sync_target, self.exclude_from_sync):
             self.local_rsync(os.path.join(sync_with, "."), os.path.join(
                 self.local_image, sync_target[1:]),
-                recursive=True, exclude=exclude_from_sync)
+                             recursive=True, exclude=exclude_from_sync)
 
         # start an experiment locally using a local singularity container
         stdout = os.popen(self.run_in_singularity(*commands,
@@ -798,8 +784,8 @@ class ExperimentConfig(object):
                 self.sync_with, self.sync_target, self.exclude_from_sync):
             self.remote_rsync(os.path.join(sync_with, "."), os.path.join(
                 self.remote_image, sync_target[1:]),
-                recursive=True, exclude=exclude_from_sync,
-                source_is_remote=False, destination_is_remote=True)
+                              recursive=True, exclude=exclude_from_sync,
+                              source_is_remote=False, destination_is_remote=True)
 
         # sleep in order to avoid sending too many commands to the server
         time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
@@ -841,7 +827,6 @@ class ExperimentConfig(object):
                   .format(interval=interval, commands=commands))
 
         if client is None:
-
             # open an ssh connection to the remote host by logging in using
             # the provided username and password for that machine
             client = paramiko.SSHClient()
@@ -1162,7 +1147,7 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         if len(singularity_init_commands) > 0:
             config.singularity_init_commands = \
                 () if no_singularity_init_commands \
-                else singularity_init_commands
+                    else singularity_init_commands
 
 
 @command_line_interface.command()
@@ -1489,8 +1474,8 @@ def upload(recursive: bool = False, exclude: str = "",
     with PersistentExperimentConfig() as config:
         config.remote_rsync(source_path, os.path.join(
             config.remote_image, destination_path),
-            recursive=recursive, exclude=exclude,
-            source_is_remote=False, destination_is_remote=True)
+                            recursive=recursive, exclude=exclude,
+                            source_is_remote=False, destination_is_remote=True)
 
 
 @command_line_interface.command()
@@ -1549,25 +1534,25 @@ def dump(file: str = None):
             json.dump(dict(recipe=config.recipe,
                            local_image=config.local_image,
                            remote_image=config.remote_image,
-                           
+
                            before_apt_commands=config.before_apt_commands,
                            post_apt_commands=config.post_apt_commands,
                            before_env_commands=config.before_env_commands,
                            post_env_commands=config.post_env_commands,
-                           
+
                            bootstrap=config.bootstrap,
                            bootstrap_from=config.bootstrap_from,
                            apt_packages=config.apt_packages,
-                           
+
                            anaconda_version=config.anaconda_version,
                            python_version=config.python_version,
                            env_name=config.env_name,
                            env_create_arguments=config.env_create_arguments,
-                           
+
                            sync_with=config.sync_with,
                            sync_target=config.sync_target,
                            exclude_from_sync=config.exclude_from_sync,
-                           
+
                            slurm_init_commands=config.slurm_init_commands,
                            singularity_init_commands=
                            config.singularity_init_commands), f, indent=4)
@@ -1593,29 +1578,28 @@ def load(file: str = None):
 
     # load a dictionary containing non private configuration info
     with PersistentExperimentConfig() as config:
-        
         config.recipe = data["recipe"]
         config.local_image = data["local_image"]
         config.remote_image = data["remote_image"]
-        
+
         config.before_apt_commands = data["before_apt_commands"]
         config.post_apt_commands = data["post_apt_commands"]
         config.before_env_commands = data["before_env_commands"]
         config.post_env_commands = data["post_env_commands"]
-        
+
         config.bootstrap = data["bootstrap"]
         config.bootstrap_from = data["bootstrap_from"]
         config.apt_packages = data["apt_packages"]
-        
+
         config.anaconda_version = data["anaconda_version"]
         config.python_version = data["python_version"]
         config.env_name = data["env_name"]
         config.env_create_arguments = data["env_create_arguments"]
-        
+
         config.sync_with = data["sync_with"]
         config.sync_target = data["sync_target"]
         config.exclude_from_sync = data["exclude_from_sync"]
-        
+
         config.slurm_init_commands = data["slurm_init_commands"]
         config.singularity_init_commands = data["singularity_init_commands"]
 
