@@ -9,7 +9,7 @@ import json
 
 
 from pexpect import spawn, EOF
-from typing import List
+from typing import List, Sequence
 
 
 RECIPE_TEMPLATE = r"""Bootstrap: {bootstrap}
@@ -97,8 +97,9 @@ DEFAULT_SYNC_TARGET = ()
 DEFAULT_EXCLUDE_FROM_SYNC = ()
 
 
-# a default command that may be run in the container
-DEFAULT_INIT_COMMANDS = ()
+# commands that are run at various stages of initialization
+DEFAULT_SINGULARITY_INIT_COMMANDS = ()
+DEFAULT_SLURM_INIT_COMMANDS = ()
 
 
 # a template for running experiment commands in the container
@@ -122,6 +123,12 @@ DEFAULT_SSH_SLEEP_SECONDS = 0.005
 
 # the amount of seconds to wait by default for a command ran by pexpect
 DEFAULT_PROCESS_TIMEOUT = 10800
+
+
+def add_separator(elements: Sequence[str]):
+    for i, element in enumerate(elements):
+        yield element + (" " if i == len(elements) - 1 or
+                         element.strip().endswith("&") else " && ")
 
 
 class ExperimentConfig(object):
@@ -200,9 +207,12 @@ class ExperimentConfig(object):
         a string representing the file pattern of files to exclude when
         synchronizing code with the singularity image.
 
-    init_commands: List[str]
+    slurm_init_commands: List[str]
         a list of strings representing commands that are run within the
-        container before starting an experiment.
+        slurm node before starting a singularity container.
+    singularity_init_commands: List[str]
+        a list of strings representing commands that are run within the
+        singularity container before starting an experiment.
 
     """
 
@@ -227,7 +237,9 @@ class ExperimentConfig(object):
                  sync_with: List[str] = DEFAULT_SYNC_WITH,
                  sync_target: List[str] = DEFAULT_SYNC_TARGET,
                  exclude_from_sync: List[str] = DEFAULT_EXCLUDE_FROM_SYNC,
-                 init_commands: List[str] = DEFAULT_INIT_COMMANDS):
+                 slurm_init_commands: List[str] = DEFAULT_SLURM_INIT_COMMANDS,
+                 singularity_init_commands:
+                 List[str] = DEFAULT_SINGULARITY_INIT_COMMANDS):
         """Create an experiment singularity image that manages packages and
         runs experiments in a reproducible and distributable container,
         using a set of package configurations for each experiment.
@@ -303,9 +315,12 @@ class ExperimentConfig(object):
             a string representing the file pattern of files to exclude when
             synchronizing code with the singularity image.
 
-        init_commands: List[str]
+        slurm_init_commands: List[str]
             a list of strings representing commands that are run within the
-            container before starting an experiment.
+            slurm node before starting a singularity container.
+        singularity_init_commands: List[str]
+            a list of strings representing commands that are run within the
+            singularity container before starting an experiment.
 
         """
 
@@ -342,8 +357,9 @@ class ExperimentConfig(object):
         self.sync_target = sync_target
         self.exclude_from_sync = exclude_from_sync
 
-        # arguments that specify how to sync code before an experiment
-        self.init_commands = init_commands
+        # commands that are run at various stages of initialization
+        self.slurm_init_commands = slurm_init_commands
+        self.singularity_init_commands = singularity_init_commands
 
     def recipe_exists(self) -> bool:
         """Utility function that checks the local disk for whether a
@@ -504,11 +520,13 @@ class ExperimentConfig(object):
 
         """
 
+        # handle multiple exclude patterns separated by whitespace
+        command = [y for x in exclude.split(" ") for y in ["--exclude", x]]
+        command.extend([source_path, destination_path])
+
         # spawn a child process that copies files to the host using rsync
         child = spawn("rsync", ["-ra" if recursive else "-a", "--progress",
-                                "--exclude", exclude,
-                                source_path,
-                                destination_path], encoding='utf-8')
+                                *command], encoding='utf-8')
 
         # print outputs of the process to the terminal but not passwords
         child.logfile_read = sys.stdout
@@ -564,12 +582,14 @@ class ExperimentConfig(object):
                 username=self.ssh_username,
                 host=self.ssh_host, path=destination_path)
 
+        # handle multiple exclude patterns separated by whitespace
+        command = [y for x in exclude.split(" ") for y in ["--exclude", x]]
+        command.extend(["-e", "ssh -p {}".format(self.ssh_port),
+                        source_path, destination_path])
+
         # spawn a child process that copies files to the host using rsync
         child = spawn("rsync", ["-ra" if recursive else "-a", "--progress",
-                                "--exclude", exclude,
-                                "-e", "ssh -p {}".format(self.ssh_port),
-                                source_path,
-                                destination_path], encoding='utf-8')
+                                *command], encoding='utf-8')
 
         # print outputs of the process to the terminal but not passwords
         child.logfile_read = sys.stdout
@@ -627,11 +647,12 @@ class ExperimentConfig(object):
 
         """
 
+        singularity_command = "".join(add_separator(
+            [". /anaconda3/etc/profile.d/conda.sh",
+             "conda activate {}".format(self.env_name)] +
+            list(self.singularity_init_commands) + list(commands)))
         return SINGULARITY_EXEC_TEMPLATE.format(
-            singularity_command=" && ".join(
-                [". /anaconda3/etc/profile.d/conda.sh",
-                 "conda activate {}".format(self.env_name)] +
-                list(self.init_commands) + list(commands)), image=image)
+            singularity_command=singularity_command, image=image)
 
     def local_run(self, *commands: str, rebuild: bool = False):
         """Generate and run a command in the bash shell that starts a
@@ -715,10 +736,12 @@ class ExperimentConfig(object):
 
         """
 
+        slurm_command = "".join(add_separator(
+            list(self.slurm_init_commands) +
+            [self.run_in_singularity(*commands, image=image)]))
         return SLURM_SRUN_TEMPLATE.format(
             partition=partition, num_cpus=num_cpus, num_gpus=num_gpus,
-            num_hours=num_hours, memory=memory,
-            slurm_command=self.run_in_singularity(*commands, image=image))
+            num_hours=num_hours, memory=memory, slurm_command=slurm_command)
 
     def remote_run(self, *commands: str, rebuild: bool = False,
                    partition: str = "russ_reserved", num_cpus: int = 4,
@@ -830,7 +853,7 @@ class ExperimentConfig(object):
 
         # generate a command to that runs on the remote machine over ssh
         time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
-        commands = " && ".join(commands)
+        commands = "".join(add_separator(commands))
         stdout = client.exec_command(commands, get_pty=True)[1]
 
         # print intermediate outputs into the terminal as the command runs
@@ -953,8 +976,10 @@ def command_line_interface():
 @click.option('--no-sync-target', is_flag=True)
 @click.option('--exclude-from-sync', type=str, default=None, multiple=True)
 @click.option('--no-exclude-from-sync', is_flag=True)
-@click.option('--init-commands', type=str, default=None, multiple=True)
-@click.option('--no-init-commands', is_flag=True)
+@click.option('--slurm-init-commands', type=str, default=None, multiple=True)
+@click.option('--no-slurm-init-commands', is_flag=True)
+@click.option('--singularity-init-commands', type=str, default=None, multiple=True)
+@click.option('--no-singularity-init-commands', is_flag=True)
 def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         ssh_password: str = DEFAULT_SSH_PASSWORD,
         ssh_host: str = DEFAULT_SSH_HOST,
@@ -984,8 +1009,11 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         no_sync_target: bool = False,
         exclude_from_sync: List[str] = DEFAULT_EXCLUDE_FROM_SYNC,
         no_exclude_from_sync: bool = False,
-        init_commands: List[str] = DEFAULT_INIT_COMMANDS,
-        no_init_commands: bool = False):
+        slurm_init_commands: List[str] = DEFAULT_SLURM_INIT_COMMANDS,
+        no_slurm_init_commands: bool = False,
+        singularity_init_commands:
+        List[str] = DEFAULT_SINGULARITY_INIT_COMMANDS,
+        no_singularity_init_commands: bool = False):
     """Assign new parameters to the persistent experiment config by loading
     the config from the disk and accepting new parameters for the config
     via a command line interface exposes to the shell.
@@ -1061,9 +1089,12 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         a string representing the file pattern of files to exclude when
         synchronizing code with the singularity image.
 
-    init_commands: List[str]
+    slurm_init_commands: List[str]
         a list of strings representing commands that are run within the
-        container before starting an experiment.
+        slurm node before starting a singularity container.
+    singularity_init_commands: List[str]
+        a list of strings representing commands that are run within the
+        singularity container before starting an experiment.
 
     """
 
@@ -1125,9 +1156,13 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
             config.exclude_from_sync = \
                 () if no_exclude_from_sync else exclude_from_sync
 
-        if len(init_commands) > 0:
-            config.init_commands = \
-                () if no_init_commands else init_commands
+        if len(slurm_init_commands) > 0:
+            config.slurm_init_commands = \
+                () if no_slurm_init_commands else slurm_init_commands
+        if len(singularity_init_commands) > 0:
+            config.singularity_init_commands = \
+                () if no_singularity_init_commands \
+                else singularity_init_commands
 
 
 @command_line_interface.command()
@@ -1152,7 +1187,8 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
 @click.option('--sync-with', is_flag=True)
 @click.option('--sync-target', is_flag=True)
 @click.option('--exclude-from-sync', is_flag=True)
-@click.option('--init-commands', is_flag=True)
+@click.option('--slurm-init-commands', is_flag=True)
+@click.option('--singularity-init-commands', is_flag=True)
 def get(ssh_username: bool = False,
         ssh_password: bool = False,
         ssh_host: bool = False,
@@ -1174,7 +1210,8 @@ def get(ssh_username: bool = False,
         sync_with: bool = False,
         sync_target: bool = False,
         exclude_from_sync: bool = False,
-        init_commands: bool = False):
+        slurm_init_commands: bool = False,
+        singularity_init_commands: bool = False):
     """Read new parameters to the persistent experiment config by loading
     the config from the disk and accepting a set of indicators that
     specify which of the parameters to read to the terminal.
@@ -1250,9 +1287,12 @@ def get(ssh_username: bool = False,
         a string representing the file pattern of files to exclude when
         synchronizing code with the singularity image.
 
-    init_commands: List[str]
+    slurm_init_commands: List[str]
         a list of strings representing commands that are run within the
-        container before starting an experiment.
+        slurm node before starting a singularity container.
+    singularity_init_commands: List[str]
+        a list of strings representing commands that are run within the
+        singularity container before starting an experiment.
 
     """
 
@@ -1306,8 +1346,11 @@ def get(ssh_username: bool = False,
         if exclude_from_sync:
             print("exclude_from_sync:", config.exclude_from_sync)
 
-        if init_commands:
-            print("init_commands:", config.init_commands)
+        if slurm_init_commands:
+            print("slurm_init_commands:", config.slurm_init_commands)
+        if singularity_init_commands:
+            print("singularity_init_commands:",
+                  config.singularity_init_commands)
 
 
 @command_line_interface.command(
@@ -1525,7 +1568,9 @@ def dump(file: str = None):
                            sync_target=config.sync_target,
                            exclude_from_sync=config.exclude_from_sync,
                            
-                           init_commands=config.init_commands), f, indent=4)
+                           slurm_init_commands=config.slurm_init_commands,
+                           singularity_init_commands=
+                           config.singularity_init_commands), f, indent=4)
 
 
 @command_line_interface.command()
@@ -1571,7 +1616,8 @@ def load(file: str = None):
         config.sync_target = data["sync_target"]
         config.exclude_from_sync = data["exclude_from_sync"]
         
-        config.init_commands = data["init_commands"]
+        config.slurm_init_commands = data["slurm_init_commands"]
+        config.singularity_init_commands = data["singularity_init_commands"]
 
 
 @command_line_interface.command()

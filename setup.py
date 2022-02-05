@@ -2,6 +2,9 @@ from setuptools import find_packages
 from setuptools import setup
 
 
+DESCRIPTION = "CLI For Launching Experiments Using Singularity On Slurm"
+
+
 with open('README.md', 'r') as readme:
     LONG_DESCRIPTION = readme.read()  # use readme as long description
 
@@ -24,15 +27,14 @@ CLASSIFIERS = [
 URL = 'https://github.com/brandontrabucco/spork'
 
 
-setup(name='spork-cli', version='1.0.13', license='MIT',
-      packages=find_packages(include=['spork', 'spork.*']),
-      description=('CLI For Launching '
-                   'Experiments Using Singularity On Slurm'),
-      long_description=LONG_DESCRIPTION, classifiers=CLASSIFIERS,
-      long_description_content_type='text/markdown',
+setup(name='spork-cli', version='1.0.14', license='MIT',
       author='Brandon Trabucco', author_email='brandon@btrabucco.com',
-      url=URL, download_url=URL + '/archive/v1_0_13.tar.gz',
-      keywords=['Deep Learning', 'Research', 'Management'],
-      install_requires=['click', 'paramiko', 'pexpect', 'spython'],
+      packages=find_packages(include=['spork', 'spork.*']),
       entry_points={'console_scripts': (
-          'spork=spork.experiment_config:command_line_interface',)})
+          'spork=spork.experiment_config:command_line_interface',)},
+      classifiers=CLASSIFIERS, description=DESCRIPTION,
+      long_description=LONG_DESCRIPTION,
+      long_description_content_type='text/markdown',
+      url=URL, download_url=URL + '/archive/v1_0_14.tar.gz',
+      keywords=['Deep Learning', 'Research', 'Management'],
+      install_requires=['click', 'paramiko', 'pexpect', 'spython'])
