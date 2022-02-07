@@ -7,6 +7,7 @@ import pickle as pkl
 import click
 import json
 
+from itertools import product
 from pexpect import spawn, EOF
 from typing import List, Sequence
 
@@ -729,7 +730,8 @@ class ExperimentConfig(object):
             partition=partition, num_cpus=num_cpus, num_gpus=num_gpus,
             num_hours=num_hours, memory=memory, slurm_command=slurm_command)
 
-    def remote_run(self, *commands: str, rebuild: bool = False,
+    def remote_run(self, *commands: str, exclude_nodes: str = None, rebuild: bool = False,
+                   sweep_params: List[str] = (), sweep_values: List[str] = (),
                    partition: str = "russ_reserved", num_cpus: int = 4,
                    num_gpus: int = 1, memory: int = 16, num_hours: int = 8):
         """Generate and run a command in the bash shell that starts a
@@ -744,6 +746,13 @@ class ExperimentConfig(object):
         rebuild: bool
             a boolean that controls whether the singularity image should be
             rebuilt even if it already exists on the disk.
+
+        sweep_params: List[str]
+            list of strings representing names of a grid of parameters of
+            the specified command that will be searched and replaced.
+        sweep_values: List[str]
+            list of strings representing values of a grid of parameters of
+            the specified command that will be searched and replaced.
 
         num_cpus: int
             an integer representing the number of cpu cores that will be
@@ -787,18 +796,35 @@ class ExperimentConfig(object):
                               recursive=True, exclude=exclude_from_sync,
                               source_is_remote=False, destination_is_remote=True)
 
-        # sleep in order to avoid sending too many commands to the server
-        time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
+        # generate a template slurm command that will be run on the cluster
+        slurm_template = self.run_in_slurm(  # with the target node parameters
+            *commands, image=self.remote_image,
+            partition=partition, num_cpus=num_cpus,
+            num_gpus=num_gpus, num_hours=num_hours, memory=memory)
 
-        # generate a command to launch a remote experiment using slurm
-        stdout = client.exec_command(self.run_in_slurm(
-            *commands, image=self.remote_image, partition=partition,
-            num_cpus=num_cpus, num_gpus=num_gpus,
-            num_hours=num_hours, memory=memory), get_pty=True)[1]
+        # if we are excluding certain nodes on the cluster
+        if exclude_nodes is not None:  # then add an exclude flag to slurm
+            slurm_template = slurm_template.replace(
+                "sbatch", f"sbatch --exclude={exclude_nodes}")
 
-        # print the output from the terminal as the command runs
-        for line in iter(stdout.readline, ""):
-            print(line, end="")  # prints even if not yet finished
+        # iterate through every possible assignment of the parameters on an
+        # n-dimensional grid of hyper-parameters
+        for assignment in product(*map(lambda v: v.split(","), sweep_values)):
+
+            # fill in the slurm template with hyper-parameter values
+            slurm_command = slurm_template  # by replacing names with values
+            for param_name, param_value in zip(sweep_params, assignment):
+                slurm_command = slurm_template.replace(param_name, param_value)
+
+            # sleep to avoid sending too many commands to the server
+            time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
+
+            # generate a command to launch a remote experiment using slurm
+            stdout = client.exec_command(slurm_command, get_pty=True)[1]
+
+            # print the output from the terminal as the command runs
+            for line in iter(stdout.readline, ""):
+                print(line, end="")  # prints even if not yet finished
 
     def remote_shell(self, *commands: str, client: paramiko.SSHClient = None,
                      watch: bool = False, interval: float = 1.0):
@@ -1370,10 +1396,14 @@ def local(rebuild: bool = False, commands: List[str] = ()):
 @click.option('--memory', type=int, default=16)
 @click.option('--num-hours', type=int, default=8)
 @click.option('--partition', type=str, default="russ_reserved")
+@click.option('--exclude-nodes', type=str, default=None)
+@click.option('--sweep-params', type=str, multiple=True, default=())
+@click.option('--sweep-values', type=str, multiple=True, default=())
 @click.option('--rebuild', is_flag=True)
 @click.argument('commands', type=str, nargs=-1)
-def remote(num_cpus: int = 4, num_gpus: int = 1, memory: int = 16,
-           num_hours: int = 8, partition: str = "russ_reserved",
+def remote(num_cpus: int = 4, num_gpus: int = 1, memory: int = 16, num_hours: int = 8,
+           partition: str = "russ_reserved", exclude_nodes: str = None,
+           sweep_params: List[str] = (), sweep_values: List[str] = (),
            rebuild: bool = False, commands: List[str] = ()):
     """Load the persistent experiment configuration file and launch an
     experiment remotely by loading the singularity image and syncing local
@@ -1397,6 +1427,13 @@ def remote(num_cpus: int = 4, num_gpus: int = 1, memory: int = 16,
         a string that represents the slurm partition of machines to use
         when scheduling a slurm job on the host machine.
 
+    sweep_params: List[str]
+        a list of strings representing names of a grid of parameters of the
+        specified command that will be searched and replaced.
+    sweep_values: List[str]
+        a list of strings representing values of a grid of parameters of the
+        specified command that will be searched and replaced.
+
     rebuild: bool
         a boolean that controls whether the singularity image should be
         rebuilt even if it already exists on the disk.
@@ -1409,8 +1446,9 @@ def remote(num_cpus: int = 4, num_gpus: int = 1, memory: int = 16,
     with PersistentExperimentConfig() as config:
         commands = [" ".join(commands)] if len(commands) > 0 else []
         config.remote_run(*commands, rebuild=rebuild, partition=partition,
-                          num_cpus=num_cpus, num_gpus=num_gpus,
-                          memory=memory, num_hours=num_hours)
+                          num_cpus=num_cpus, num_gpus=num_gpus, memory=memory,
+                          num_hours=num_hours, exclude_nodes=exclude_nodes,
+                          sweep_params=sweep_params, sweep_values=sweep_values)
 
 
 @command_line_interface.command(
