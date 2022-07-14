@@ -22,7 +22,7 @@ with open('README.md', 'r') as readme:
     LONG_DESCRIPTION = readme.read()  # use readme as long description
 
 
-setup(name='spork-cli', version='1.0.16', license='MIT',
+setup(name='spork-cli', version='1.0.17', license='MIT',
       author='Brandon Trabucco', author_email='brandon@btrabucco.com',
       packages=find_packages(include=['spork', 'spork.*']),
       entry_points={'console_scripts': (
@@ -30,6 +30,6 @@ setup(name='spork-cli', version='1.0.16', license='MIT',
       classifiers=CLASSIFIERS, description=DESCRIPTION,
       long_description=LONG_DESCRIPTION,
       long_description_content_type='text/markdown',
-      url=URL, download_url=URL + '/archive/v1_0_16.tar.gz',
+      url=URL, download_url=URL + '/archive/v1_0_17.tar.gz',
       keywords=['Deep Learning', 'Research', 'Management'],
       install_requires=['click', 'paramiko', 'pexpect', 'spython'])

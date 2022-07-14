@@ -91,11 +91,12 @@ DEFAULT_EXCLUDE_FROM_SYNC = ()
 
 # commands that are run at various stages of initialization
 DEFAULT_SINGULARITY_INIT_COMMANDS = ()
+DEFAULT_SINGULARITY_OPTIONS = ()
 DEFAULT_SLURM_INIT_COMMANDS = ()
 
 # a template for running experiment commands in the container
-SINGULARITY_EXEC_TEMPLATE = \
-    "singularity exec --nv -w {image} bash -c \"{singularity_command}\""
+SINGULARITY_EXEC_TEMPLATE = "singularity exec --nv -w \
+{singularity_options} {image} bash -c \"{singularity_command}\""
 
 # a template for launching an experiment using a slurm scheduler
 SLURM_SRUN_TEMPLATE = "sbatch --cpus-per-task={num_cpus} \
@@ -198,6 +199,9 @@ class ExperimentConfig(object):
     slurm_init_commands: List[str]
         a list of strings representing commands that are run within the
         slurm node before starting a singularity container.
+    singularity_options: List[str]
+        a list of strings that is passed to the singularity exec command, 
+        which may be used to specify mount points and gpu options.
     singularity_init_commands: List[str]
         a list of strings representing commands that are run within the
         singularity container before starting an experiment.
@@ -226,6 +230,7 @@ class ExperimentConfig(object):
                  sync_target: List[str] = DEFAULT_SYNC_TARGET,
                  exclude_from_sync: List[str] = DEFAULT_EXCLUDE_FROM_SYNC,
                  slurm_init_commands: List[str] = DEFAULT_SLURM_INIT_COMMANDS,
+                 singularity_options: List[str] = DEFAULT_SINGULARITY_OPTIONS,
                  singularity_init_commands:
                  List[str] = DEFAULT_SINGULARITY_INIT_COMMANDS):
         """Create an experiment singularity image that manages packages and
@@ -306,6 +311,9 @@ class ExperimentConfig(object):
         slurm_init_commands: List[str]
             a list of strings representing commands that are run within the
             slurm node before starting a singularity container.
+        singularity_options: List[str]
+            a list of strings that is passed to the singularity exec command, 
+            which may be used to specify mount points and gpu options.
         singularity_init_commands: List[str]
             a list of strings representing commands that are run within the
             singularity container before starting an experiment.
@@ -347,6 +355,7 @@ class ExperimentConfig(object):
 
         # commands that are run at various stages of initialization
         self.slurm_init_commands = slurm_init_commands
+        self.singularity_options = singularity_options
         self.singularity_init_commands = singularity_init_commands
 
     def recipe_exists(self) -> bool:
@@ -639,6 +648,7 @@ class ExperimentConfig(object):
              "conda activate {}".format(self.env_name)] +
             list(self.singularity_init_commands) + list(commands)))
         return SINGULARITY_EXEC_TEMPLATE.format(
+            singularity_options=" ".join(self.singularity_options), 
             singularity_command=singularity_command, image=image)
 
     def local_run(self, *commands: str, rebuild: bool = False):
@@ -814,7 +824,7 @@ class ExperimentConfig(object):
             # fill in the slurm template with hyper-parameter values
             slurm_command = slurm_template  # by replacing names with values
             for param_name, param_value in zip(sweep_params, assignment):
-                slurm_command = slurm_template.replace(param_name, param_value)
+                slurm_command = slurm_command.replace(param_name, param_value)
 
             # sleep to avoid sending too many commands to the server
             time.sleep(DEFAULT_SSH_SLEEP_SECONDS)
@@ -989,6 +999,8 @@ def command_line_interface():
 @click.option('--no-exclude-from-sync', is_flag=True)
 @click.option('--slurm-init-commands', type=str, default=None, multiple=True)
 @click.option('--no-slurm-init-commands', is_flag=True)
+@click.option('--singularity-options', type=str, default=None, multiple=True)
+@click.option('--no-singularity-options', is_flag=True)
 @click.option('--singularity-init-commands', type=str, default=None, multiple=True)
 @click.option('--no-singularity-init-commands', is_flag=True)
 def set(ssh_username: str = DEFAULT_SSH_USERNAME,
@@ -1022,6 +1034,8 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         no_exclude_from_sync: bool = False,
         slurm_init_commands: List[str] = DEFAULT_SLURM_INIT_COMMANDS,
         no_slurm_init_commands: bool = False,
+        singularity_options: List[str] = DEFAULT_SLURM_INIT_COMMANDS,
+        no_singularity_options: bool = False,
         singularity_init_commands:
         List[str] = DEFAULT_SINGULARITY_INIT_COMMANDS,
         no_singularity_init_commands: bool = False):
@@ -1103,6 +1117,9 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
     slurm_init_commands: List[str]
         a list of strings representing commands that are run within the
         slurm node before starting a singularity container.
+    singularity_options: List[str]
+        a list of strings that is passed to the singularity exec command, 
+        which may be used to specify mount points and gpu options.
     singularity_init_commands: List[str]
         a list of strings representing commands that are run within the
         singularity container before starting an experiment.
@@ -1170,6 +1187,9 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
         if len(slurm_init_commands) > 0:
             config.slurm_init_commands = \
                 () if no_slurm_init_commands else slurm_init_commands
+        if len(singularity_options) > 0:
+            config.singularity_options = \
+                () if no_singularity_options else singularity_options
         if len(singularity_init_commands) > 0:
             config.singularity_init_commands = \
                 () if no_singularity_init_commands \
@@ -1199,6 +1219,7 @@ def set(ssh_username: str = DEFAULT_SSH_USERNAME,
 @click.option('--sync-target', is_flag=True)
 @click.option('--exclude-from-sync', is_flag=True)
 @click.option('--slurm-init-commands', is_flag=True)
+@click.option('--singularity-options', is_flag=True)
 @click.option('--singularity-init-commands', is_flag=True)
 def get(ssh_username: bool = False,
         ssh_password: bool = False,
@@ -1222,6 +1243,7 @@ def get(ssh_username: bool = False,
         sync_target: bool = False,
         exclude_from_sync: bool = False,
         slurm_init_commands: bool = False,
+        singularity_options: bool = False,
         singularity_init_commands: bool = False):
     """Read new parameters to the persistent experiment config by loading
     the config from the disk and accepting a set of indicators that
@@ -1301,6 +1323,9 @@ def get(ssh_username: bool = False,
     slurm_init_commands: List[str]
         a list of strings representing commands that are run within the
         slurm node before starting a singularity container.
+    singularity_options: List[str]
+        a list of strings that is passed to the singularity exec command, 
+        which may be used to specify mount points and gpu options.
     singularity_init_commands: List[str]
         a list of strings representing commands that are run within the
         singularity container before starting an experiment.
@@ -1359,6 +1384,8 @@ def get(ssh_username: bool = False,
 
         if slurm_init_commands:
             print("slurm_init_commands:", config.slurm_init_commands)
+        if singularity_options:
+            print("singularity_options:", config.singularity_options)
         if singularity_init_commands:
             print("singularity_init_commands:",
                   config.singularity_init_commands)
@@ -1592,6 +1619,7 @@ def dump(file: str = None):
                            exclude_from_sync=config.exclude_from_sync,
 
                            slurm_init_commands=config.slurm_init_commands,
+                           singularity_options=config.singularity_options,
                            singularity_init_commands=
                            config.singularity_init_commands), f, indent=4)
 
@@ -1639,6 +1667,7 @@ def load(file: str = None):
         config.exclude_from_sync = data["exclude_from_sync"]
 
         config.slurm_init_commands = data["slurm_init_commands"]
+        config.singularity_options = data["singularity_options"]
         config.singularity_init_commands = data["singularity_init_commands"]
 
 
